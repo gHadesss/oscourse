@@ -114,6 +114,52 @@ InitGraphics (
   // Hint: Use GetMode/SetMode functions.
   //
 
+  UINT32 CurrentHorizontalResolution = 1280;
+  UINT32 CurrentVerticalResolution = 720;
+  UINT32 TargetMode = -1;
+  UINT32 CurrentMode;
+
+  UINTN SizeOfInfo;
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
+  // EFI_GRAPHICS_PIXEL_FORMAT CurrentPixelFormat = PixelRedGreenBlueReserved8BitPerColor;
+
+  for (CurrentMode = 0; CurrentMode < GraphicsOutput->Mode->MaxMode - 1; CurrentMode++) {
+    Status = GraphicsOutput->QueryMode(
+      GraphicsOutput,
+      CurrentMode,
+      &SizeOfInfo,
+      &Info
+    );
+
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "JOS: Cannot query GOP protocol mode - %r\n", Status));
+      return Status;
+    }
+
+    if (CurrentHorizontalResolution == Info->HorizontalResolution
+      && CurrentVerticalResolution == Info->VerticalResolution) {
+      // && CurrentPixelFormat == Info->PixelFormat) {
+
+        TargetMode = CurrentMode;
+        break;
+    }
+  }
+
+  if (TargetMode == -1) {
+      DEBUG ((DEBUG_ERROR, "JOS: Cannot set passed graphics params - %r\n", Status));
+      return EFI_INVALID_PARAMETER;
+  }
+
+  Status = GraphicsOutput->SetMode(
+    GraphicsOutput,
+    TargetMode
+  );
+
+  if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "JOS: Cannot set GOP protocol mode - %r\n", Status));
+      return Status;
+  }
+
   //
   // Fill screen with black.
   //
@@ -270,7 +316,13 @@ GetKernelFile (
   // get loader's containing device.
   //
   // LAB 1: Your code here
-  (void)LoadedImage;
+  // (void)LoadedImage;
+
+  Status = gBS->HandleProtocol(
+    gImageHandle,
+    &gEfiLoadedImageProtocolGuid,
+    (VOID **) &LoadedImage
+  );
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "JOS: Cannot find LoadedImage protocol - %r\n", Status));
@@ -288,7 +340,13 @@ GetKernelFile (
   // to read the kernel from it later.
   //
   // LAB 1: Your code here
-  (void)FileSystem;
+  // (void)FileSystem;
+
+  Status = gBS->HandleProtocol(
+    LoadedImage->DeviceHandle,
+    &gEfiSimpleFileSystemProtocolGuid,
+    (VOID **) &FileSystem
+  );
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "JOS: Cannot find own FileSystem protocol - %r\n", Status));
@@ -300,7 +358,12 @@ GetKernelFile (
   // NOTE: Don't forget to Use ->Close after you've done using it.
   //
   // LAB 1: Your code here
-  (void)CurrentDriveRoot;
+  // (void)CurrentDriveRoot;
+
+  Status = FileSystem->OpenVolume(
+    FileSystem,
+    &CurrentDriveRoot
+  );
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "JOS: Cannot access own file system - %r\n", Status));
@@ -312,7 +375,15 @@ GetKernelFile (
   // for reading (as EFI_FILE_MODE_READ)
   //
   // LAB 1: Your code here
-  KernelFile = NULL;
+  // KernelFile = NULL;
+
+  Status = CurrentDriveRoot->Open(
+    CurrentDriveRoot,
+    &KernelFile,
+    KERNEL_PATH,
+    EFI_FILE_MODE_READ,
+    EFI_FILE_READ_ONLY
+  );
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "JOS: Cannot access own file system - %r\n", Status));
@@ -982,7 +1053,7 @@ UefiMain (
   UINTN              EntryPoint;
   VOID               *GateData;
 
-#if 1 ///< Uncomment to await debugging
+#if 0 ///< Uncomment to await debugging
   volatile BOOLEAN   Connected;
   DEBUG ((DEBUG_INFO, "JOS: Awaiting debugger connection\n"));
 
