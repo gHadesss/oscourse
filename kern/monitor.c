@@ -31,6 +31,7 @@ static struct Command commands[] = {
         {"help", "Display this list of commands", mon_help},
         {"kerninfo", "Display information about the kernel", mon_kerninfo},
         {"backtrace", "Print stack backtrace", mon_backtrace},
+        {"mycmd", "Print custom command", NULL}
 };
 #define NCOMMANDS (sizeof(commands) / sizeof(commands[0]))
 
@@ -60,6 +61,33 @@ mon_kerninfo(int argc, char **argv, struct Trapframe *tf) {
 int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf) {
     // LAB 2: Your code here
+    struct Ripdebuginfo info;
+
+    cprintf("Stack backtrace:\n");
+    uint64_t rbp = read_rbp();
+    uint64_t rip = *((uint64_t *)(rbp + 8));
+    int ret = debuginfo_rip((uintptr_t)rip, &info);
+
+    if (ret < 0) {
+        return ret;
+    }
+    
+    while (rbp != 0) {
+        cprintf("  rbp %016lx  rip %016lx\n", rbp, rip);
+        cprintf("    %s:%d: %*s+%lu\n", info.rip_file, info.rip_line, info.rip_fn_namelen, 
+            info.rip_fn_name, (uintptr_t)(rip - info.rip_fn_addr));
+
+        rbp = *((uint64_t *)(rbp));
+        rip = *((uint64_t *)(rbp + 8));
+        ret = debuginfo_rip((uintptr_t)rip, &info);
+
+        if (ret < 0) {
+            // cprintf("%d - failed ret\n", ret); 
+            // return ret;
+            // при неполном выводе информации возвращать отрицательный код возврата не имеет смысла,
+            // так как нам нужно вывести самый первый фрейм без стоящего перед ним "ret rip"
+        }
+    }
 
     return 0;
 }
@@ -92,6 +120,11 @@ runcmd(char *buf, struct Trapframe *tf) {
     /* Lookup and invoke the command */
     if (!argc) return 0;
     for (size_t i = 0; i < NCOMMANDS; i++) {
+        if (strcmp(argv[0], commands[3].name) == 0) {
+            cprintf("My custom command\n");
+            return 0;
+        }
+
         if (strcmp(argv[0], commands[i].name) == 0)
             return commands[i].func(argc, argv, tf);
     }
