@@ -89,6 +89,13 @@ env_init(void) {
     /* Set up envs array */
 
     // LAB 3: Your code here
+    env_free_list = envs;
+
+    for (int i = 0; i < NENV; i++) {
+        envs[i].env_link = ((i == NENV - 1) ? NULL : &envs[i + 1]);
+        envs[i].env_id = 0;
+        envs[i].env_status = ENV_FREE;
+    }
 }
 
 /* Allocates and initializes a new environment.
@@ -145,7 +152,8 @@ env_alloc(struct Env **newenv_store, envid_t parent_id, enum EnvType type) {
     env->env_tf.tf_cs = GD_KT;
 
     // LAB 3: Your code here:
-    // static uintptr_t stack_top = 0x2000000;
+    static uintptr_t stack_top = 0x2000000;
+    env->env_tf.tf_rsp = stack_top - PAGE_SIZE * 2 * (env - envs);
 #else
     env->env_tf.tf_ds = GD_UD | 3;
     env->env_tf.tf_es = GD_UD | 3;
@@ -170,8 +178,46 @@ env_alloc(struct Env **newenv_store, envid_t parent_id, enum EnvType type) {
 static int
 bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_start, uintptr_t image_end) {
     // LAB 3: Your code here:
-
     /* NOTE: find_function from kdebug.c should be used */
+    struct Elf *elf_image = (struct Elf *)binary;
+    struct Secthdr *sh = (struct Secthdr *)(binary + elf_image->e_shoff);
+    char *sh_str = (char *)(binary + sh[elf_image->e_shstrndx].sh_offset);
+
+    uint16_t symtndx = ~((uint16_t)0U);
+    uint16_t strtndx = ~((uint16_t)0U);
+
+    for (uint16_t i = 0; i < elf_image->e_shnum; i++) {
+        if (sh[i].sh_type == ELF_SHT_SYMTAB) {
+            symtndx = i;
+        }
+
+        if (sh[i].sh_type == ELF_SHT_STRTAB && !strcmp(&sh_str[sh[i].sh_name], ".strtab")) {
+            strtndx = i;
+        }
+    }
+
+
+    if (strtndx == (uint16_t)-1 || strcmp(&sh_str[sh[strtndx].sh_name], ".strtab")) {
+        panic("bind_functions: can't find strt\n");
+    }
+
+    if (symtndx == (uint16_t)-1 || strcmp(&sh_str[sh[symtndx].sh_name], ".symtab")) {
+        panic("bind_functions: can't find symt\n");
+    }
+
+    struct Elf64_Sym *symt = (struct Elf64_Sym *)(binary + sh[symtndx].sh_offset);
+    uintptr_t addr = 0;
+
+    for (size_t i = 0; i < sh[symtndx].sh_size / sizeof(struct Elf64_Sym *); i++) {
+        if (ELF64_ST_BIND(symt[i].st_info) == STB_GLOBAL && ELF64_ST_TYPE(symt[i].st_info) == STT_OBJECT) {
+            addr = find_function((char *)(binary + sh[strtndx].sh_offset + symt[i].st_name));
+
+            if (addr) {
+                uintptr_t *func_addr = (uintptr_t *)symt[i].st_value;
+                *func_addr = addr;
+            }
+        }
+    }
 
     return 0;
 }
@@ -220,6 +266,58 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
 static int
 load_icode(struct Env *env, uint8_t *binary, size_t size) {
     // LAB 3: Your code here
+    struct Elf *elf_image = (struct Elf *)binary;
+
+    if (elf_image->e_magic != ELF_MAGIC) {
+        cprintf("load_icode: file has magic %08X instead of %08X\n", elf_image->e_magic, ELF_MAGIC);
+        return -E_INVALID_EXE;
+    }
+
+    if (elf_image->e_shentsize != sizeof(struct Secthdr)) {
+        cprintf("load_icode: file has sections of %u bytes instead of %u\n", elf_image->e_shentsize,
+            (uint32_t) sizeof(struct Secthdr));
+        return -E_INVALID_EXE;
+    }
+
+    if (elf_image->e_shstrndx >= elf_image->e_shnum) {
+        cprintf("load_icode: file string section has invalid index %u out of %u entries\n", elf_image->e_shstrndx, 
+            elf_image->e_shnum);
+        return -E_INVALID_EXE;
+    }
+
+    if (elf_image->e_phentsize != sizeof(struct Proghdr)) {
+        cprintf("load_icode: file has program headers of %u bytes instead of %u\n", elf_image->e_phentsize, 
+            (uint32_t) sizeof(struct Proghdr));
+        return -E_INVALID_EXE;
+    }
+
+    struct Proghdr *phs = (struct Proghdr *)((uint64_t)binary + elf_image->e_phoff);
+    uintptr_t image_start = 0, image_end = 0;
+
+    for (uint16_t i = 0; i < elf_image->e_phnum; i++) {
+        if (phs[i].p_type != ELF_PROG_LOAD) {
+            continue;
+        }
+
+        if (phs[i].p_filesz > phs[i].p_memsz) {
+            cprintf("load_icode: section %u has %lu filesz with %lu memsz\n", i, phs[i].p_filesz, phs[i].p_memsz);
+            return -E_INVALID_EXE;
+        }
+
+        memcpy((void *)phs[i].p_va, (void *)((uint64_t)binary + phs[i].p_offset), (size_t)phs[i].p_filesz);
+        memset((void *)(phs[i].p_va + phs[i].p_filesz), 0, (size_t)(phs[i].p_memsz - phs[i].p_filesz));
+
+        if (image_start < (uintptr_t)(binary + phs[i].p_offset)) {
+            image_start = (uintptr_t)(binary + phs[i].p_offset);
+        }
+
+        if (image_end < (uintptr_t)(binary + phs[i].p_offset + phs[i].p_memsz)) {
+            image_end = (uintptr_t)(binary + phs[i].p_offset + phs[i].p_memsz);
+        }
+    }
+
+    env->env_tf.tf_rip = elf_image->e_entry;
+    bind_functions(env, binary, size, image_start, image_end);
 
     return 0;
 }
@@ -233,6 +331,20 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
 void
 env_create(uint8_t *binary, size_t size, enum EnvType type) {
     // LAB 3: Your code here
+    struct Env *newenv = NULL;
+    int res = env_alloc(&newenv, 0, type);
+    
+    if (res) {
+        panic("env_alloc: can't allocate env, %i", res);
+    }
+
+    res = load_icode(newenv, binary, size);
+
+    if (res) {
+        panic("env_alloc: can't load binary, %i", res);
+    }
+
+    newenv->binary = binary;
 }
 
 
@@ -261,6 +373,12 @@ env_destroy(struct Env *env) {
      * it traps to the kernel. */
 
     // LAB 3: Your code here
+    env->env_status = ENV_DYING;
+
+    if (env == curenv) {
+        env_free(env);
+        sched_yield();
+    }
 }
 
 #ifdef CONFIG_KSPACE
@@ -352,7 +470,17 @@ env_run(struct Env *env) {
     }
 
     // LAB 3: Your code here
+    if (curenv) {
+        if (curenv->env_status == ENV_RUNNING) {
+            curenv->env_status = ENV_RUNNABLE;
+        }
+    }
 
-    while (1)
-        ;
+    curenv = env;
+    curenv->env_status = ENV_RUNNING;
+    curenv->env_runs++;
+
+    env_pop_tf(&curenv->env_tf);
+
+    panic("Reached unrecheble\n");
 }
