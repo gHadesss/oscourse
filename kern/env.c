@@ -183,8 +183,8 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
     struct Secthdr *sh = (struct Secthdr *)(binary + elf_image->e_shoff);
     char *sh_str = (char *)(binary + sh[elf_image->e_shstrndx].sh_offset);
 
-    uint16_t symtndx = ~((uint16_t)0U);
-    uint16_t strtndx = ~((uint16_t)0U);
+    uint16_t symtndx = UINT16_MAX;
+    uint16_t strtndx = UINT16_MAX;
 
     for (uint16_t i = 0; i < elf_image->e_shnum; i++) {
         if (sh[i].sh_type == ELF_SHT_SYMTAB) {
@@ -195,7 +195,6 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
             strtndx = i;
         }
     }
-
 
     if (strtndx == (uint16_t)-1 || strcmp(&sh_str[sh[strtndx].sh_name], ".strtab")) {
         panic("bind_functions: can't find strt\n");
@@ -213,8 +212,10 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
             addr = find_function((char *)(binary + sh[strtndx].sh_offset + symt[i].st_name));
 
             if (addr) {
+                // uintptr_t *func_addr = (uintptr_t *)symt[i].st_value; causes UB because of unaligned 
+                // *func_addr = addr;                                    memory access
                 uintptr_t *func_addr = (uintptr_t *)symt[i].st_value;
-                *func_addr = addr;
+                memcpy((void *)func_addr, (void *)&addr, sizeof(addr));
             }
         }
     }
@@ -292,7 +293,7 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
     }
 
     struct Proghdr *phs = (struct Proghdr *)((uint64_t)binary + elf_image->e_phoff);
-    uintptr_t image_start = 0, image_end = 0;
+    uintptr_t image_start = (uintptr_t)binary, image_end = (uintptr_t)binary + size;
 
     for (uint16_t i = 0; i < elf_image->e_phnum; i++) {
         if (phs[i].p_type != ELF_PROG_LOAD) {
@@ -306,14 +307,6 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
 
         memcpy((void *)phs[i].p_va, (void *)((uint64_t)binary + phs[i].p_offset), (size_t)phs[i].p_filesz);
         memset((void *)(phs[i].p_va + phs[i].p_filesz), 0, (size_t)(phs[i].p_memsz - phs[i].p_filesz));
-
-        if (image_start < (uintptr_t)(binary + phs[i].p_offset)) {
-            image_start = (uintptr_t)(binary + phs[i].p_offset);
-        }
-
-        if (image_end < (uintptr_t)(binary + phs[i].p_offset + phs[i].p_memsz)) {
-            image_end = (uintptr_t)(binary + phs[i].p_offset + phs[i].p_memsz);
-        }
     }
 
     env->env_tf.tf_rip = elf_image->e_entry;
