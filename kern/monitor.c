@@ -105,7 +105,17 @@ mon_dumpcmos(int argc, char **argv, struct Trapframe *tf) {
     // Make sure you understand the values read.
     // Hint: Use cmos_read8()/cmos_write8() functions.
     // LAB 4: Your code here
+    cprintf("CMOS memory dump:");
 
+    for (size_t i = 0; i < CMOS_SIZE; i++) {
+        if (i % 16 == 0) {
+            cprintf("\n%02lX: ", i);
+        }
+
+        cprintf("%02X ", cmos_read8(i));
+    }
+
+    cprintf("\n");
     return 0;
 }
 
@@ -137,10 +147,10 @@ runcmd(char *buf, struct Trapframe *tf) {
     /* Lookup and invoke the command */
     if (!argc) return 0;
     for (size_t i = 0; i < NCOMMANDS; i++) {
-        if (strcmp(argv[0], commands[3].name) == 0) {
-            cprintf("My custom command\n");
-            return 0;
-        }
+        // if (strcmp(argv[0], commands[3].name) == 0) {
+        //     cprintf("My custom command\n");
+        //     return 0;
+        // }
 
         if (strcmp(argv[0], commands[i].name) == 0)
             return commands[i].func(argc, argv, tf);

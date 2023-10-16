@@ -195,16 +195,16 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
             symtndx = i;
         }
 
-        if (sh[i].sh_type == ELF_SHT_STRTAB && !strcmp(&sh_str[sh[i].sh_name], ".strtab")) {
+        if (sh[i].sh_type == ELF_SHT_STRTAB && !strncmp(&sh_str[sh[i].sh_name], ".strtab", 7)) {
             strtndx = i;
         }
     }
 
-    if (strtndx == (uint16_t)-1 || strcmp(&sh_str[sh[strtndx].sh_name], ".strtab")) {
+    if (strtndx == (uint16_t)-1 || strncmp(&sh_str[sh[strtndx].sh_name], ".strtab", 7)) {
         panic("bind_functions: can't find strt\n");
     }
 
-    if (symtndx == (uint16_t)-1 || strcmp(&sh_str[sh[symtndx].sh_name], ".symtab")) {
+    if (symtndx == (uint16_t)-1 || strncmp(&sh_str[sh[symtndx].sh_name], ".symtab", 7)) {
         panic("bind_functions: can't find symt\n");
     }
 

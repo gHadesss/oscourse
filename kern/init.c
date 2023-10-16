@@ -110,6 +110,7 @@ i386_init(void) {
     /* Framebuffer init should be done after memory init */
     fb_init();
     if (trace_init) cprintf("Framebuffer initialised\n");
+    // assert(false);
 
     trap_init();
 
