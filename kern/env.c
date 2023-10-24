@@ -218,6 +218,10 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
             if (addr) {
                 // uintptr_t *func_addr = (uintptr_t *)symt[i].st_value; causes UB because of unaligned 
                 // *func_addr = addr;                                    memory access
+                if ((uintptr_t)symt[i].st_value > image_end || (uintptr_t)symt[i].st_value < image_start) {
+                    panic("bind_functions: symbol is out of binary address range\n");
+                }
+
                 uintptr_t *func_addr = (uintptr_t *)symt[i].st_value;
                 memcpy((void *)func_addr, (void *)&addr, sizeof(addr));
             }
@@ -297,7 +301,7 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
     }
 
     struct Proghdr *phs = (struct Proghdr *)((uint64_t)binary + elf_image->e_phoff);
-    uintptr_t image_start = (uintptr_t)binary, image_end = (uintptr_t)binary + size;
+    uintptr_t image_start = UINTPTR_MAX, image_end = 0;
 
     for (uint16_t i = 0; i < elf_image->e_phnum; i++) {
         if (phs[i].p_type != ELF_PROG_LOAD) {
@@ -311,6 +315,14 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
 
         memcpy((void *)phs[i].p_va, (void *)((uint64_t)binary + phs[i].p_offset), (size_t)phs[i].p_filesz);
         memset((void *)(phs[i].p_va + phs[i].p_filesz), 0, (size_t)(phs[i].p_memsz - phs[i].p_filesz));
+
+        if (image_start > (uintptr_t)phs[i].p_va) {
+            image_start = (uintptr_t)phs[i].p_va;
+        }
+
+        if (image_end < (uintptr_t)(phs[i].p_va + phs[i].p_filesz)) {
+            image_end = (uintptr_t)(phs[i].p_va + phs[i].p_filesz);
+        }
     }
 
     env->env_tf.tf_rip = elf_image->e_entry;

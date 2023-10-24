@@ -200,16 +200,49 @@ static uint64_t freq = 0;
 
 void
 timer_start(const char *name) {
-    (void)timer_started;
-    (void)timer_id;
-    (void)timer;
-    (void)freq;
+    // (void)timer_started;
+    // (void)timer_id;
+    // (void)timer;
+    // (void)freq;
+
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (timertab[i].timer_name && !strncmp(name, timertab[i].timer_name, 6)) {
+            timer_id = i;
+            break;
+        }
+    }
+
+    if (timer_id == -1) {
+        print_timer_error();
+        // panic("timer_start: can't find timer %s\n", name);
+        return;
+    }
+
+    timer_started = 1;
+    freq = timertab[timer_id].get_cpu_freq();
+    timer = read_tsc();
 }
 
 void
 timer_stop(void) {
+    if (!timer_started) {
+        print_timer_error();
+        return;
+    }
+
+    print_time((read_tsc() - timer) / freq);
+    timer_started = 0;
+    timer_id = -1;
 }
 
 void
 timer_cpu_frequency(const char *name) {
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (timertab[i].timer_name && !strncmp(name, timertab[i].timer_name, 6)) {
+            cprintf("%lu\n", timertab[i].get_cpu_freq());
+            return;
+        }
+    }
+
+    print_timer_error();
 }
