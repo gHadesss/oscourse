@@ -27,7 +27,6 @@ entry:
 
 .global save_trapframe_trap
 save_trapframe_trap:
-    cli
     popq save_trapframe_ret(%rip)
     popq saved_rip(%rip)
     popq saved_cs(%rip)

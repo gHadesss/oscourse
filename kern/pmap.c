@@ -83,6 +83,10 @@ list_init(struct List *list) {
 inline static void __attribute__((always_inline))
 list_append(struct List *list, struct List *new) {
     // LAB 6: Your code here
+    new->prev = list;
+    new->next = list->next;
+    list->next->prev = new;
+    list->next = new;
 }
 
 /*
@@ -92,6 +96,9 @@ list_append(struct List *list, struct List *new) {
 inline static struct List *__attribute__((always_inline))
 list_del(struct List *list) {
     // LAB 6: Your code here
+    list->next->prev = list->prev;
+    list->prev->next = list->next;
+    list_init(list);
 
     return list;
 }
@@ -173,8 +180,29 @@ alloc_child(struct Page *parent, bool right) {
     assert(parent);
 
     // LAB 6: Your code here
+    // struct Page *new = NULL;
+    if (parent->class == 0) {
+        return NULL;
+    }
 
-    struct Page *new = NULL;
+    struct Page *new = alloc_descriptor(parent->state);
+    new->parent = parent;
+    new->class = parent->class - 1;
+    new->refc = parent->refc ? 1 : 0;
+    
+    if (right) {
+        parent->right = new;
+        uintptr_t new_addr = ((parent->addr) << CLASS_BASE) + (uintptr_t)(1UL << (new->class + CLASS_BASE));
+
+        if (new_addr < (parent->addr) << CLASS_BASE) {   // overflow
+            panic("alloc_child: overflow in new->addr\n");
+        } else {
+            new->addr = new_addr >> CLASS_BASE;
+        }
+    } else {
+        parent->left = new;
+        new->addr = parent->addr;
+    }
 
     return new;
 }
@@ -314,8 +342,20 @@ attach_region(uintptr_t start, uintptr_t end, enum PageState type) {
     end = ROUNDUP(end, CLASS_SIZE(0));
 
     // LAB 6: Your code here
-}
+    uintptr_t cur_start = start;
+    while (cur_start < end) {
+        while (class < MAX_CLASS && !(cur_start & CLASS_MASK(class + 1))) {
+            class++;
+        }
 
+        while (end < cur_start + CLASS_SIZE(class)) {
+            class--;
+        }
+
+        page_lookup(NULL, cur_start, class, type, 1);
+        cur_start += CLASS_SIZE(class);
+    }
+}
 /*
  * Helper function for dumping single page table
  * entry (base) describing element with given size (step)
@@ -424,6 +464,14 @@ dump_virtual_tree(struct Page *node, int class) {
 void
 dump_memory_lists(void) {
     // LAB 6: Your code here
+    for (int i = 0; i < MAX_CLASS; i++) {
+        struct List *cur_node = &free_classes[i];
+
+        do {
+            cprintf("Page at address %016lx, class %02d\n", page2pa((struct Page *)cur_node), i);
+            cur_node = cur_node->next;
+        } while (cur_node != &free_classes[i]);
+    }
 }
 
 
@@ -522,11 +570,13 @@ detect_memory(void) {
 
     /* Attach first page as reserved memory */
     // LAB 6: Your code here
+    attach_region(0, PAGE_SIZE, RESERVED_NODE);
 
     /* Attach kernel and old IO memory
      * (from IOPHYSMEM to the physical address of end label. end points the the
      *  end of kernel executable image.)*/
     // LAB 6: Your code here
+    attach_region(IOPHYSMEM, (uintptr_t)end - KERN_BASE_ADDR, RESERVED_NODE);
 
     /* Detect memory via ether UEFI or CMOS */
     if (uefi_lp && uefi_lp->MemoryMap) {
