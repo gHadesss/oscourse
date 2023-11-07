@@ -385,24 +385,38 @@ hpet_handle_interrupts_tim1(void) {
  * about pause instruction. */
 uint64_t
 hpet_cpu_frequency(void) {
-    // static 
-    uint64_t cpu_freq = 0;
+    static uint64_t cpu_freq;
 
     // LAB 5: Your code here
-    // if (cpu_freq) {
-    //     return cpu_freq;
-    // }
-    
-    uint64_t hpet_start = hpet_get_main_cnt();
-    uint64_t tsc_start = read_tsc();
+    if (cpu_freq) {
+        return cpu_freq;
+    }
 
-    for (size_t i = 0; i < 1000; i++) {
+    /* It takes from 10k to 140k of tsc ticks to fetch the HPET
+     * main counter value, so we need to keep it in mind when 
+     * measuring CPU frequency. */
+
+    // superscalar
+    // virtualization
+    
+    uint64_t tsc1, tsc2;
+    uint64_t hpet_start, hpet_end;
+    uint64_t next_moment = hpetFreq / 10;  // 100ms delta
+
+    hpet_end = hpet_get_main_cnt() + next_moment;
+    tsc1 = read_tsc();
+
+    while (hpet_get_main_cnt() < hpet_end) {
         asm("pause");
     }
 
-    uint64_t hpet_ticks = hpet_get_main_cnt() - hpet_start;
-    uint64_t tsc_ticks = read_tsc() - tsc_start;
-    cpu_freq = (tsc_ticks * hpetFreq) / hpet_ticks;
+    hpet_start = hpet_end - next_moment;
+    hpet_end = hpet_get_main_cnt();
+    tsc2 = read_tsc();
+
+    cpu_freq = tsc2 - tsc1;
+    cpu_freq *= hpetFreq;
+    cpu_freq /= (hpet_end - hpet_start);
 
     return cpu_freq;
 }
@@ -421,32 +435,37 @@ pmtimer_cpu_frequency(void) {
     static uint64_t cpu_freq;
 
     // LAB 5: Your code here
-    uint32_t fl24 = (get_fadt()->Flags >> 8) & 1;
+    if (cpu_freq) {
+        return cpu_freq;
+    }
+
+    uint32_t TMR_VAL_EXT = 1U << 8;
+    uint32_t fl24 = (get_fadt()->Flags & TMR_VAL_EXT) >> 8;
     
+    uint64_t tsc_ticks = 0;
     uint64_t pmt_ticks = 0;
     uint64_t pmt_start = pmtimer_get_timeval();
     uint64_t tsc_start = read_tsc();
+    uint64_t next_moment = PM_FREQ / 10 + pmt_start;    // moment after 100ms delta
+    pmt_ticks = pmt_start;
 
-    for (size_t i = 0; i < 1000; i++) {
-        asm("pause");
-
+    while (pmt_start < next_moment) {
         uint64_t pmt_cur = pmtimer_get_timeval();
+        tsc_ticks = read_tsc();
 
-        if (pmt_cur > pmt_start) {
-            pmt_ticks += pmt_cur - pmt_start;
+        if (pmt_cur > pmt_ticks) {
+            pmt_start += pmt_cur - pmt_ticks;
         } else {
             if (fl24) {
-                pmt_ticks += pmt_cur + 0x00FFFFFF - pmt_start;
+                pmt_start += pmt_cur + 0xFFFFFFFF - pmt_ticks;  // 32-bit overflow
             } else {
-                pmt_ticks += pmt_cur + 0xFFFFFFFF - pmt_start;
+                pmt_start += pmt_cur + 0x00FFFFFF - pmt_ticks;  // 24-bit overflow
             }
         }
 
-        pmt_start = pmt_cur;
+        pmt_ticks = pmt_cur;
     }
 
-    uint64_t tsc_ticks = read_tsc() - tsc_start;
-    cpu_freq = (tsc_ticks * PM_FREQ) / pmt_ticks;
-
+    cpu_freq = (tsc_ticks - tsc_start) * 10;
     return cpu_freq;
 }
