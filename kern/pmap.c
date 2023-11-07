@@ -465,12 +465,13 @@ void
 dump_memory_lists(void) {
     // LAB 6: Your code here
     for (int i = 0; i < MAX_CLASS; i++) {
-        struct List *cur_node = &free_classes[i];
+        struct List *cur_node = free_classes[i].next;
 
-        do {
-            cprintf("Page at address %016lx, class %02d\n", page2pa((struct Page *)cur_node), i);
+        while (cur_node != &free_classes[i]) {
+            cprintf(":memory_lists: %016lx - %016lx (%02d class)\n", page2pa((struct Page *)cur_node),
+                    page2pa((struct Page *)cur_node) + CLASS_SIZE(i), i);
             cur_node = cur_node->next;
-        } while (cur_node != &free_classes[i]);
+        }
     }
 }
 
