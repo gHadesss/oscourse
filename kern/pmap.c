@@ -192,12 +192,12 @@ alloc_child(struct Page *parent, bool right) {
     
     if (right) {
         parent->right = new;
-        uintptr_t new_addr = ((parent->addr) << CLASS_BASE) + (uintptr_t)(1UL << (new->class + CLASS_BASE));
+        uintptr_t new_addr = parent->addr + (uintptr_t)(CLASS_SIZE(new->class) >> CLASS_BASE);
 
-        if (new_addr < (parent->addr) << CLASS_BASE) {   // overflow
+        if (new_addr < parent->addr) {   // overflow
             panic("alloc_child: overflow in new->addr\n");
         } else {
-            new->addr = new_addr >> CLASS_BASE;
+            new->addr = new_addr;
         }
     } else {
         parent->left = new;
@@ -354,6 +354,7 @@ attach_region(uintptr_t start, uintptr_t end, enum PageState type) {
 
         page_lookup(NULL, cur_start, class, type, 1);
         cur_start += CLASS_SIZE(class);
+        class = 0;
     }
 }
 /*
@@ -468,7 +469,7 @@ dump_memory_lists(void) {
         struct List *cur_node = free_classes[i].next;
 
         while (cur_node != &free_classes[i]) {
-            cprintf(":memory_lists: %016lx - %016lx (%02d class)\n", page2pa((struct Page *)cur_node),
+            cprintf(":memory_lists: %016lx - %016llx (%02d class)\n", page2pa((struct Page *)cur_node),
                     page2pa((struct Page *)cur_node) + CLASS_SIZE(i), i);
             cur_node = cur_node->next;
         }
@@ -577,7 +578,7 @@ detect_memory(void) {
      * (from IOPHYSMEM to the physical address of end label. end points the the
      *  end of kernel executable image.)*/
     // LAB 6: Your code here
-    attach_region(IOPHYSMEM, (uintptr_t)end - KERN_BASE_ADDR, RESERVED_NODE);
+    attach_region(IOPHYSMEM, PADDR(end), RESERVED_NODE);
 
     /* Detect memory via ether UEFI or CMOS */
     if (uefi_lp && uefi_lp->MemoryMap) {
@@ -606,6 +607,9 @@ detect_memory(void) {
              * of type type*/
             // LAB 6: Your code here
             (void)type;
+            uintptr_t start_addr = start->PhysicalStart;
+            uintptr_t end_addr = start_addr + start->NumberOfPages * EFI_PAGE_SIZE;
+            attach_region(start_addr, end_addr, type);
 
             start = (void *)((uint8_t *)start + uefi_lp->MemoryMapDescriptorSize);
         }
