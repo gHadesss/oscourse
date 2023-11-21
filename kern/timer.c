@@ -9,6 +9,7 @@
 #include <kern/kclock.h>
 #include <kern/picirq.h>
 #include <kern/trap.h>
+#include <kern/pmap.h>
 
 #define kilo      (1000ULL)
 #define Mega      (kilo * kilo)
@@ -170,8 +171,10 @@ acpi_find_table(const char *sign) {
     }
 
     for (size_t i = 0; i < sdt_num; i++) {
-        ACPISDTHeader *hdr = (ACPISDTHeader *)mmio_map_region(rsdt_ptr->PointerToOtherSDT[i], 
+        ACPISDTHeader *hdr = (ACPISDTHeader *)mmio_map_region((physaddr_t)rsdt_ptr->PointerToOtherSDT[i], 
             sizeof(ACPISDTHeader));
+        hdr = (ACPISDTHeader *)mmio_remap_last_region((physaddr_t)rsdt_ptr->PointerToOtherSDT[i], 
+            (void *)hdr, sizeof(ACPISDTHeader), hdr->Length);
         
         if (!strncmp(hdr->Signature, sign, 4)) {
             return hdr;
@@ -194,8 +197,8 @@ get_fadt(void) {
         panic("get_fadt: couldn't find FADT\n");
     }
 
-    fadt_ptr = (FADT *)mmio_remap_last_region((physaddr_t)fadt_ptr, (void *)fadt_ptr, sizeof(ACPISDTHeader), 
-        fadt_ptr->h.Length);
+    // fadt_ptr = (FADT *)mmio_remap_last_region((physaddr_t)fadt_ptr, (void *)fadt_ptr, sizeof(ACPISDTHeader), 
+    //     fadt_ptr->h.Length);
     uint8_t *ptr = (uint8_t *)fadt_ptr;
     uint32_t sum = 0;
 
@@ -224,8 +227,8 @@ get_hpet(void) {
         panic("get_hpet: couldn't find HPET\n");
     }
 
-    hpet_ptr = (HPET *)mmio_remap_last_region((physaddr_t)hpet_ptr, (void *)hpet_ptr, sizeof(ACPISDTHeader), 
-        sizeof(HPET));
+    // hpet_ptr = (HPET *)mmio_remap_last_region((physaddr_t)hpet_ptr, (void *)hpet_ptr, sizeof(ACPISDTHeader), 
+    //     sizeof(HPET));
     uint8_t *ptr = (uint8_t *)hpet_ptr;
     uint32_t sum = 0;
 
