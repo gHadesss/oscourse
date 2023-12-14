@@ -94,10 +94,13 @@ env_init(void) {
      * Don't forget about rounding.
      * kzalloc_region() only works with current_space != NULL */
     // LAB 8: Your code here
+    envs = (struct Env *)kzalloc_region(NENV * sizeof(struct Env));
+    memset(envs, 0, ROUNDUP(sizeof(struct Env) * NENV, PAGE_SIZE));
 
     /* Map envs to UENVS read-only,
      * but user-accessible (with PROT_USER_ set) */
     // LAB 8: Your code here
+    map_region(current_space, UENVS, &kspace, (uintptr_t)envs, UENVS_SIZE, PROT_USER_ | PROT_R);
 
     /* Set up envs array */
 
@@ -290,6 +293,7 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
 static int
 load_icode(struct Env *env, uint8_t *binary, size_t size) {
     // LAB 3: Your code here
+    // LAB 8: Your code here
     struct Elf *elf_image = (struct Elf *)binary;
 
     if (elf_image->e_magic != ELF_MAGIC) {
@@ -315,6 +319,7 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
         return -E_INVALID_EXE;
     }
 
+    switch_address_space(&env->address_space);
     struct Proghdr *phs = (struct Proghdr *)((uint64_t)binary + elf_image->e_phoff);
     uintptr_t image_start = UINTPTR_MAX, image_end = 0;
 
@@ -325,11 +330,22 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
 
         if (phs[i].p_filesz > phs[i].p_memsz) {
             cprintf("load_icode: section %u has %lu filesz with %lu memsz\n", i, phs[i].p_filesz, phs[i].p_memsz);
+            switch_address_space(&kspace);
+            return -E_INVALID_EXE;
+        }
+
+        uintptr_t rounded_addr = ROUNDDOWN(phs[i].p_va, PAGE_SIZE);
+        size_t rounded_size = ROUNDUP(phs[i].p_memsz, PAGE_SIZE);
+
+        // memset((void *)(phs[i].p_va + phs[i].p_filesz), 0, (size_t)(phs[i].p_memsz - phs[i].p_filesz));
+
+        if (map_region(current_space, rounded_addr, NULL, 0, rounded_size, PROT_RWX | PROT_USER_ | ALLOC_ZERO)) {
+            cprintf("load_icode: failed to map region [%lx, %lx]\n", rounded_addr, rounded_addr + rounded_size - 1);
+            switch_address_space(&kspace);
             return -E_INVALID_EXE;
         }
 
         memcpy((void *)phs[i].p_va, (void *)((uint64_t)binary + phs[i].p_offset), (size_t)phs[i].p_filesz);
-        memset((void *)(phs[i].p_va + phs[i].p_filesz), 0, (size_t)(phs[i].p_memsz - phs[i].p_filesz));
 
         if (image_start > (uintptr_t)phs[i].p_va) {
             image_start = (uintptr_t)phs[i].p_va;
@@ -340,9 +356,20 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
         }
     }
 
+    uintptr_t stack_addr = (uintptr_t)(USER_STACK_TOP - USER_STACK_SIZE);
+    if (map_region(&env->address_space, stack_addr, NULL, 0, USER_STACK_SIZE, PROT_R | PROT_W | PROT_USER_ | ALLOC_ZERO)) {
+        cprintf("load_icode: failed to map user stack\n");
+        switch_address_space(&kspace);
+        return -E_INVALID_EXE;
+    }
+
+    switch_address_space(&kspace);
     env->env_tf.tf_rip = elf_image->e_entry;
-    bind_functions(env, binary, size, image_start, image_end);
-    // LAB 8: Your code here
+#ifdef CONFIG_KSPACE
+    if (bind_functions(env, binary, size, image_start, image_end)) {
+        panic("load_icode: bind_functions has failed\n");
+    }
+#endif
     return 0;
 }
 
@@ -355,6 +382,7 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
 void
 env_create(uint8_t *binary, size_t size, enum EnvType type) {
     // LAB 3: Your code here
+    // LAB 8: Your code here
     struct Env *newenv = NULL;
     int res = env_alloc(&newenv, 0, type);
     
@@ -369,7 +397,7 @@ env_create(uint8_t *binary, size_t size, enum EnvType type) {
     }
 
     newenv->binary = binary;
-    // LAB 8: Your code here
+    newenv->env_type = type;
 }
 
 
@@ -419,6 +447,7 @@ env_destroy(struct Env *env) {
     /* Reset in_page_fault flags in case *current* environment
      * is getting destroyed after performing invalid memory access. */
     // LAB 8: Your code here
+    in_page_fault = 0;
 }
 
 #ifdef CONFIG_KSPACE
@@ -502,6 +531,7 @@ env_run(struct Env *env) {
     }
 
     // LAB 3: Your code here
+    // LAB 8: Your code here
     if (curenv) {
         if (curenv->env_status == ENV_RUNNING) {
             curenv->env_status = ENV_RUNNABLE;
@@ -512,8 +542,8 @@ env_run(struct Env *env) {
     curenv->env_status = ENV_RUNNING;
     curenv->env_runs++;
 
+    switch_address_space(&curenv->address_space);
     env_pop_tf(&curenv->env_tf);
 
     panic("Reached unrecheble\n");
-    // LAB 8: Your code here
 }
