@@ -2030,10 +2030,6 @@ static uintptr_t user_mem_check_addr;
 int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm) {
     // LAB 8: Your code here
-    // if ((uintptr_t)(va + len) > MAX_USER_READABLE) {
-    //     user_mem_check_addr = MAX_USER_READABLE;
-    //     return -E_FAULT;
-    // }
 
     void *cur = (void *)ROUNDDOWN(va, PAGE_SIZE);
     struct Page *root_page = env->address_space.root;
