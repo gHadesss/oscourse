@@ -21,9 +21,14 @@ nvme_map(struct NvmeController *ctl) {
      * TIP: Functions get_bar_address(), get_bar_size()
      *      and sys_map_physical_region() might be useful here */
     // LAB 10: Your code here
+    uintptr_t nvme_pa = get_bar_address(ctl->pcidev, 0);
+    size_t memsize = MIN(NVME_MAX_MAP_MEM, get_bar_size(ctl->pcidev, 0));
+    
+    if (sys_map_physical_region(nvme_pa, CURENVID, (void *)ctl->mmio_base_addr, memsize, PROT_RW | PROT_CD)) {
+        return -NVME_MAP_ERR;
+    }
 
-
-    DEBUG("NVMe MMIO base = %p, size = %x, pa = %lx", ctl->mmio_base_addr, memsize, nvme_pa);
+    DEBUG("NVMe MMIO base = %p, size = %lx, pa = %lx", ctl->mmio_base_addr, memsize, nvme_pa);
 
     return NVME_OK;
 }
@@ -619,6 +624,16 @@ nvme_cmd_rw(struct NvmeController *ctl, struct NvmeQueueAttributes *ioq, int opc
      *      and elbatm should remain zeroed. They are not used here.
      * TIP: Use ioq->sq_tail as cid like it is done in other commands for simplicity. */
     // LAB 10: Your code here
+    int cid = ioq->sq_tail;
+    struct NvmeCmdRW* cmd = &ioq->sq[cid].rw;
+    memset(cmd, 0, sizeof(struct NvmeCmdRW));
+    cmd->common.opc = opc;
+    cmd->common.cid = cid;
+    cmd->common.nsid = nsid;
+    cmd->slba = slba;
+    cmd->nlb = nlb - 1;
+    cmd->common.prp[0] = prp1;
+    cmd->common.prp[1] = prp2;
 
     DEBUG("q = %d, sq = %d - %d, cid = %#x, nsid = %d, lba = %#lx, nb = %#x, prp = %#lx.%#lx (%c)",
           ioq->id, ioq->sq_head, ioq->sq_tail, cid, nsid, slba, nlb, prp1, prp2,
@@ -628,10 +643,14 @@ nvme_cmd_rw(struct NvmeController *ctl, struct NvmeQueueAttributes *ioq, int opc
      * TIP: Use nvme_submit_cmd() and nvme_wait_completion(). Don't
      *      forget to check for potential errors! */
     // LAB 10: Your code here
-
     int err = -NVME_IOCMD_FAILED;
+    err = nvme_submit_cmd(ctl, ioq);
 
-    return err;
+    if (err != NVME_OK) {
+        return err;
+    }
+
+    return nvme_wait_completion(ctl, ioq, cid, 1);
 }
 
 int
@@ -654,6 +673,6 @@ nvme_read(uint64_t secno, void *dst, size_t nsecs) {
      *      Remember that the command takes physical address as an argument
      *      and 'dst' is a virtual address. */
     // LAB 10: Your code here
-
-    return -1;
+    return nvme_cmd_rw(&nvme, &nvme.ioq[0], NVME_CMD_READ, 
+                       nvme.nsi.id, secno, nsecs, get_phys_addr(dst), 0);
 }

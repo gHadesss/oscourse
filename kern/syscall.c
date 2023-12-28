@@ -87,9 +87,6 @@ static void
 sys_yield(void) {
     // LAB 9: Your code here
     sched_yield();
-
-    // unreachable
-    return;
 }
 
 /* Allocate a new environment.
@@ -263,7 +260,7 @@ sys_map_region(envid_t srcenvid, uintptr_t srcva,
         return -E_INVAL;
     }
 
-    if (!(perm & PROT_ALL) || perm & ALLOC_ZERO || perm & ALLOC_ONE) {
+    if (perm & ~PROT_ALL || perm & ALLOC_ZERO || perm & ALLOC_ONE) {
         return -E_INVAL;
     }
 
@@ -320,7 +317,24 @@ sys_map_physical_region(uintptr_t pa, envid_t envid, uintptr_t va, size_t size, 
     // LAB 10: Your code here
     // TIP: Use map_physical_region() with (perm | PROT_USER_ | MAP_USER_MMIO)
     //      And don't forget to validate arguments as always.
-    return 0;
+    struct Env* new = NULL;
+
+    if (envid2env(envid, &new, 1) < 0 || new->env_type != ENV_TYPE_FS) {
+        return -E_BAD_ENV;
+    }
+
+    // if ((va + size) >= MAX_USER_ADDRESS || va & CLASS_MASK(0) || pa & CLASS_MASK(0) || size & CLASS_MASK(0)) {
+    //     return -E_INVAL;
+    // }
+
+    // if (perm & ~PROT_ALL) {
+    //     return -E_INVAL;
+    // }
+
+    // return map_physical_region(&new->address_space, va, pa, size, perm | PROT_USER_ | MAP_USER_MMIO);
+
+    if (va >= MAX_USER_ADDRESS || PAGE_OFFSET(va) || PAGE_OFFSET(pa) || PAGE_OFFSET(size) || size > MAX_USER_ADDRESS || MAX_USER_ADDRESS - va < size || perm & (PROT_SHARE | PROT_COMBINE | PROT_LAZY)) return -E_INVAL;
+    return map_physical_region(&new->address_space, va, pa, size, perm | PROT_USER_ | MAP_USER_MMIO);
 }
 
 /* Try to send 'value' to the target env 'envid'.
@@ -387,14 +401,14 @@ sys_ipc_try_send(envid_t envid, uint32_t value, uintptr_t srcva, size_t size, in
         }
 
         // perm check
-        if (!(perm & PROT_ALL) || (perm & ALLOC_ONE) || (perm & ALLOC_ZERO)) {
+        if (perm & ~PROT_ALL) {
             return -E_INVAL;
         }
 
         // mapping and write permission check
-        if ((perm & PROT_W) && user_mem_check(curenv, (void *)srcva, size, PROT_W) < 0) {
-            return -E_INVAL;
-        }
+        // if ((perm & PROT_W) && user_mem_check(curenv, (void *)srcva, size, PROT_W) < 0) {
+        //     return -E_INVAL;
+        // }
 
         // trying to map region with min length to dstva
         size_t min = MIN(size, dst->env_ipc_maxsz);
@@ -405,6 +419,7 @@ sys_ipc_try_send(envid_t envid, uint32_t value, uintptr_t srcva, size_t size, in
         }
         
         dst->env_ipc_perm = perm;
+        dst->env_ipc_maxsz = min;
     } else {
         dst->env_ipc_perm = 0;
     }
@@ -457,8 +472,11 @@ sys_ipc_recv(uintptr_t dstva, uintptr_t maxsize) {
 static int
 sys_region_refs(uintptr_t addr, size_t size, uintptr_t addr2, uintptr_t size2) {
     // LAB 10: Your code here
+    if (addr2 >= MAX_USER_ADDRESS) {
+        return region_maxref(&curenv->address_space, addr, size);
+    }
 
-    return 0;
+    return region_maxref(&curenv->address_space, addr, size) - region_maxref(&curenv->address_space, addr2, size2);
 }
 
 /* Dispatches to the correct kernel function, passing the arguments. */
@@ -483,12 +501,12 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
         return sys_alloc_region((envid_t)a1, (uintptr_t)a2, (size_t)a3, (int)a4);
     case SYS_map_region:
         return sys_map_region((envid_t)a1, (uintptr_t)a2, (envid_t)a3, (uintptr_t)a4, (size_t)a5, (int)a6);
-    // case SYS_map_physical_region:
-    //     return sys_map_physical_region((uintptr_t)a1, (envid_t)a2, (uintptr_t)a3, (size_t)a4, (int)a5);
+    case SYS_map_physical_region:
+        return sys_map_physical_region((uintptr_t)a1, (envid_t)a2, (uintptr_t)a3, (size_t)a4, (int)a5);
     case SYS_unmap_region:
         return sys_unmap_region((envid_t)a1, (uintptr_t)a2, (size_t)a3);
-    // case SYS_region_refs:
-    //     return sys_region_refs((uintptr_t)a1, (size_t)a2, (uintptr_t)a3, (uintptr_t)a4);
+    case SYS_region_refs:
+        return sys_region_refs((uintptr_t)a1, (size_t)a2, (uintptr_t)a3, (uintptr_t)a4);
     case SYS_exofork:
         return sys_exofork();
     case SYS_env_set_status:
@@ -499,6 +517,7 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
         return sys_env_set_pgfault_upcall((envid_t)a1, (void*)a2);
     case SYS_yield:
         sys_yield();
+        return 0;
     case SYS_ipc_try_send:
         return sys_ipc_try_send((envid_t)a1, (uint32_t)a2, (uintptr_t)a3, (size_t)a4, (int)a5);
     case SYS_ipc_recv:

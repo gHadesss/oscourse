@@ -93,17 +93,20 @@ get_rsdp(void) {
         panic("acpi_find_table: invalid RSDP checksum or signature\n");
     }
 
-    if (rsd_ptr->Revision >= 2) {
-        for (size_t i = 0; i < 16; i++) {
-            sum += *ptr;
-            ptr++;
-        }
+    // Assume that Revision is greater or equals 2
 
-        sum &= 0xFFU;
+    ptr = (uint8_t *)rsd_ptr;
+    sum = 0;
 
-        if (sum) {
-            panic("acpi_find_table: invalid XSDP checksum\n");
-        }
+    for (size_t i = 0; i < rsd_ptr->Length; i++) {
+        sum += *ptr;
+        ptr++;
+    } 
+    
+    sum &= 0xFFU;
+
+    if (sum || rsd_ptr->Revision < 2) {
+        panic("acpi_find_table: invalid RSDP checksum or signature\n");
     }
 
     return rsd_ptr;
@@ -125,35 +128,18 @@ acpi_find_table(const char *sign) {
      */
     // LAB 5: Your code here:
     RSDP *rsd_ptr = get_rsdp();
-    RSDT *rsdt_ptr;
+    ACPISDTHeader *xsdt = (ACPISDTHeader *)mmio_map_region((physaddr_t)rsd_ptr->XsdtAddress, sizeof(ACPISDTHeader));
     
-    uint8_t *ptr = (uint8_t *)rsd_ptr;
+    if (strncmp(xsdt->Signature, "XSDT", 4)) {
+        panic("acpi_find_table: invalid XSDT signature\n");
+    }
+    
+    xsdt = mmio_remap_last_region((physaddr_t)rsd_ptr->XsdtAddress, xsdt, 
+            sizeof(ACPISDTHeader), xsdt->Length);
+    uint8_t *ptr = (uint8_t *)xsdt;
     uint32_t sum = 0;
 
-    if (rsd_ptr->Revision >= 2) {
-        rsdt_ptr = (RSDT *)mmio_map_region((physaddr_t)rsd_ptr->XsdtAddress, sizeof(RSDT));
-        
-        if (strncmp(rsdt_ptr->h.Signature, "XSDT", 4)) {
-            panic("acpi_find_table: invalid XSDT signature\n");
-        }
-        
-        rsdt_ptr = (RSDT *)mmio_remap_last_region((physaddr_t)(rsd_ptr->XsdtAddress), 
-            (void *)(rsd_ptr->XsdtAddress), sizeof(RSDT), rsdt_ptr->h.Length);
-    } else {
-        rsdt_ptr = (RSDT *)mmio_map_region((physaddr_t)(rsd_ptr->RsdtAddress), sizeof(RSDT));
-        
-        if (strncmp(rsdt_ptr->h.Signature, "RSDT", 4)) {
-            panic("acpi_find_table: invalid RSDT signature\n");
-        }
-        
-        rsdt_ptr = (RSDT *)mmio_remap_last_region((physaddr_t)(rsd_ptr->RsdtAddress), 
-            (void *)(uint64_t)(rsd_ptr->RsdtAddress), sizeof(RSDT), rsdt_ptr->h.Length);
-    }
-
-    ptr = (uint8_t *)rsdt_ptr;
-    sum = 0;
-
-    for (size_t i = 0; i < rsdt_ptr->h.Length; i++) {
+    for (size_t i = 0; i < xsdt->Length; i++) {
         sum += *ptr;
         ptr++;
     }
@@ -163,24 +149,20 @@ acpi_find_table(const char *sign) {
     if (sum) {
         panic("acpi_find_table: invalid RSDT/XSDT checksum\n");
     }
+    
+    ACPISDTHeader **iter = (void *)&xsdt[1];
 
-    size_t sdt_num = rsdt_ptr->h.Length - sizeof(ACPISDTHeader);
-
-    if (rsd_ptr->Revision >= 2) {
-        sdt_num /= 8;
-    } else {
-        sdt_num /= 4;
-    }
-
-    for (size_t i = 0; i < sdt_num; i++) {
-        ACPISDTHeader *hdr = (ACPISDTHeader *)mmio_map_region((physaddr_t)rsdt_ptr->PointerToOtherSDT[i], 
-            sizeof(ACPISDTHeader));
-        hdr = (ACPISDTHeader *)mmio_remap_last_region((physaddr_t)rsdt_ptr->PointerToOtherSDT[i], 
-            (void *)hdr, sizeof(ACPISDTHeader), hdr->Length);
+    for (; iter < (ACPISDTHeader **)((void *)xsdt + xsdt->Length); iter++) {
+        ACPISDTHeader *hdr = (ACPISDTHeader *)mmio_map_region((physaddr_t)(*iter), sizeof(ACPISDTHeader));
         
-        if (!strncmp(hdr->Signature, sign, 4)) {
-            return hdr;
+        if (strncmp(hdr->Signature, sign, 4)) {
+            continue;
         }
+        
+        hdr = (ACPISDTHeader *)mmio_remap_last_region((physaddr_t)(*iter), 
+               (void *)hdr, sizeof(ACPISDTHeader), hdr->Length);
+
+        return hdr;
     }
 
     return NULL;
