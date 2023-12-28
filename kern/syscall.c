@@ -323,17 +323,14 @@ sys_map_physical_region(uintptr_t pa, envid_t envid, uintptr_t va, size_t size, 
         return -E_BAD_ENV;
     }
 
-    // if ((va + size) >= MAX_USER_ADDRESS || va & CLASS_MASK(0) || pa & CLASS_MASK(0) || size & CLASS_MASK(0)) {
-    //     return -E_INVAL;
-    // }
+    if ((va + size) >= MAX_USER_ADDRESS || va & CLASS_MASK(0) || pa & CLASS_MASK(0) || size & CLASS_MASK(0)) {
+        return -E_INVAL;
+    }
 
-    // if (perm & ~PROT_ALL) {
-    //     return -E_INVAL;
-    // }
+    if (perm & ~PROT_ALL) {
+        return -E_INVAL;
+    }
 
-    // return map_physical_region(&new->address_space, va, pa, size, perm | PROT_USER_ | MAP_USER_MMIO);
-
-    if (va >= MAX_USER_ADDRESS || PAGE_OFFSET(va) || PAGE_OFFSET(pa) || PAGE_OFFSET(size) || size > MAX_USER_ADDRESS || MAX_USER_ADDRESS - va < size || perm & (PROT_SHARE | PROT_COMBINE | PROT_LAZY)) return -E_INVAL;
     return map_physical_region(&new->address_space, va, pa, size, perm | PROT_USER_ | MAP_USER_MMIO);
 }
 
@@ -469,6 +466,33 @@ sys_ipc_recv(uintptr_t dstva, uintptr_t maxsize) {
     return 0;
 }
 
+/*
+ * This function sets trapframe and is unsafe
+ * so you need:
+ *   -Check environment id to be valid and accessible
+ *   -Check argument to be valid memory
+ *   -Use nosan_memcpy to copy from usespace
+ *   -Prevent privilege escalation by overriding segments
+ *   -Only allow program to set safe flags in RFLAGS register
+ *   -Force IF to be set in RFLAGS
+ */
+static int
+sys_env_set_trapframe(envid_t envid, struct Trapframe *tf) {
+    // LAB 11: Your code here
+
+    
+
+    return 0;
+}
+
+/*
+ * This function return the difference between maximal
+ * number of references of regions [addr, addr + size] and [addr2,addr2+size2]
+ * if addr2 is less than MAX_USER_ADDRESS, or just
+ * maximal number of references to [addr, addr + size]
+ *
+ * Use region_maxref() here.
+ */
 static int
 sys_region_refs(uintptr_t addr, size_t size, uintptr_t addr2, uintptr_t size2) {
     // LAB 10: Your code here
@@ -488,6 +512,7 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
     // LAB 8: Your code here
     // LAB 9: Your code here
     // LAB 10: Your code here
+    // LAB 11: Your code here
     switch(syscallno) {
     case SYS_cputs:
         return sys_cputs((const char *)a1, (size_t)a2);
