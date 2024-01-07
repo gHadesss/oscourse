@@ -1,11 +1,77 @@
 #include <inc/assert.h>
 #include <inc/x86.h>
+#include <inc/string.h>
 #include <kern/env.h>
 #include <kern/monitor.h>
+#include <kern/pmap.h>
+#include <kern/traceopt.h>
 
 
 struct Taskstate cpu_ts;
 _Noreturn void sched_halt(void);
+
+/* This function checks if specified env is stopped via sigwait and if so, looks up
+ * for specified signals and if any exists, allows to continue execution. If not, continue waiting. 
+ * Returned values: 
+ * 0, if we may run this env; 
+ * 1, if it is still waiting. */
+bool
+check4pending_sigwait(struct Env *env) {
+    if (!env->env_sig_awaiting) {
+        return 0;
+    }
+
+    /* Search the queue for specified sigs */
+    size_t sig_idx = env->env_sig_queue_start;
+
+    while (sig_idx != env->env_sig_queue_end) {
+        int signo = env->env_sig_queue[sig_idx].qs_info.si_signo;
+
+        if (SIGNAL_MASK(signo) & env->env_sig_awaiting) {
+            break;
+        }
+        
+        sig_idx = (sig_idx + 1) % SIG_QUEUE_SIZE;
+    }
+
+    if (sig_idx == env->env_sig_queue_end) {
+        return 1;
+    }
+
+    /* Return found signal in sigwait fields, remove it from queue */
+    struct QueuedSignal *qs = env->env_sig_queue + sig_idx;
+
+    // if (trace_signals) cprintf("blah blah blah\n");
+
+    if (env->env_sig_caught_ptr) {
+        user_mem_assert(env, env->env_sig_caught_ptr, sizeof(*env->env_sig_caught_ptr), PROT_W | PROT_USER_);
+        struct AddressSpace *old = switch_address_space(&env->address_space);
+        set_wp(0);
+        nosan_memcpy((void *)env->env_sig_caught_ptr, (void *)&qs->qs_info.si_signo, sizeof(qs->qs_info.si_signo));
+        set_wp(1);
+        switch_address_space(old);
+
+        env->env_sig_caught_ptr = NULL;
+    }
+
+    env->env_sig_awaiting = 0;
+
+    struct QueuedSignal * qs_end = env->env_sig_queue + env->env_sig_queue_end;
+    if (qs < qs_end) {
+        memmove(qs, qs + 1, sizeof(struct QueuedSignal) * (env->env_sig_queue_end - sig_idx - 1));
+    }
+    else {
+        memmove(qs, qs + 1, sizeof(struct QueuedSignal) * (SIG_QUEUE_SIZE - sig_idx - 1));
+        memcpy(env->env_sig_queue + SIG_QUEUE_SIZE - 1, env->env_sig_queue, sizeof(struct QueuedSignal));
+        
+        if (env->env_sig_queue_end) {
+            memmove(env->env_sig_queue, env->env_sig_queue + 1, sizeof(struct QueuedSignal) * (env->env_sig_queue_end - 1));
+        }
+    }
+
+    env->env_sig_queue_end = (env->env_sig_queue_end - 1) % SIG_QUEUE_SIZE;
+    return 0;
+}
 
 /* Choose a user environment to run and run it */
 _Noreturn void
@@ -29,10 +95,22 @@ sched_yield(void) {
 
     for (int i = 0; i < NENV + 1; i++) {
         next_idx = (next_idx + 1) % NENV;
-        
-        if (envs[next_idx].env_status == ENV_RUNNABLE || envs[next_idx].env_status == ENV_RUNNING) {
-            env_run(&envs[next_idx]);
+
+        if (envs[next_idx].env_status != ENV_RUNNABLE && envs[next_idx].env_status != ENV_RUNNING) {
+            continue;
         }
+
+        /* you can't look up for sigcont here */
+        if (envs[next_idx].env_sig_stopped) {
+            continue;
+        }
+
+        /* If we are stopped via sigwait, we need to look for specified signals. Probably need to add special function? */
+        if (check4pending_sigwait(&envs[next_idx])) {
+            continue;
+        }
+
+        env_run(&envs[next_idx]);
     }
 
     cprintf("Halt\n");

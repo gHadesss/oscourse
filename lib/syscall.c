@@ -155,3 +155,27 @@ int
 sys_gettime(void) {
     return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0, 0);
 }
+
+int 
+sys_sigqueue(pid_t pid, int sig, const union sigval value) {
+    return syscall(SYS_sigqueue, 1, (uintptr_t)pid, (uintptr_t)sig, (uintptr_t)value.sival_ptr, 0, 0, 0);
+}
+
+int
+sys_sigwait(const sigset_t *set, int *sig) {
+    return syscall(SYS_sigwait, 1, (uintptr_t)set, (uintptr_t)sig, 0, 0, 0, 0);
+}
+
+extern void _pgfault_upcall(void);
+
+int
+sys_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
+    int res = sys_env_set_pgfault_upcall(CURENVID, _pgfault_upcall);
+    assert(!res);
+    return syscall(SYS_sigaction, 1, (uintptr_t)signum, (uintptr_t)act, (uintptr_t)oldact, 0, 0, 0);
+}
+
+int
+sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+    return syscall(SYS_sigprocmask, 1, (uintptr_t)how, (uintptr_t)set, (uintptr_t)oldset, 0, 0, 0);
+}

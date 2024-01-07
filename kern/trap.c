@@ -3,6 +3,7 @@
 #include <inc/assert.h>
 #include <inc/string.h>
 #include <inc/vsyscall.h>
+#include <inc/signal.h>
 
 #include <kern/pmap.h>
 #include <kern/trap.h>
@@ -525,4 +526,68 @@ page_fault_handler(struct Trapframe *tf) {
     // Unreachable
     while (1)
         ;
+}
+
+extern void _sighdlr_upcall();
+
+_Noreturn void
+signal_handler(struct Trapframe *tf, struct QueuedSignal *qs) {
+    // REMINDER: do not swear in educational materials and add tracing macroses later on
+    // if (trace_signals) cprintf("handling signal %d\n", qs->qs_info.si_signo); 
+
+    uintptr_t rsp = tf->tf_rsp;
+    struct UTrapframe utf = {
+        .utf_err = qs->qs_info.si_signo,
+        .utf_fault_va = 0,
+        .utf_regs = tf->tf_regs,
+        .utf_rflags = tf->tf_rflags,
+        .utf_rip = tf->tf_rip,
+        .utf_rsp = tf->tf_rsp
+    };
+    
+    /* Need to align stack to 16-byte boundary to execute call for compliance
+     * with System V ABI. */
+    if (rsp & 0xf) {
+        rsp -= (16 - (rsp & 0xf));
+    }
+
+    /* Clarification: siginfo_t is 32 bytes, sigaction is 16, and QueuedSignal is 48. */
+
+    size_t arg_size = 8 + sizeof(struct UTrapframe) + sizeof(curenv->env_sig_mask) + 4 + sizeof(struct QueuedSignal);
+    rsp = rsp - arg_size;
+    assert(!(rsp & 0xf));
+    user_mem_assert(curenv, (void *)rsp, arg_size, PROT_W | PROT_USER_);
+
+    uintptr_t dst = rsp;
+    struct AddressSpace *old = switch_address_space(&curenv->address_space);
+    set_wp(0);
+
+    nosan_memcpy((void *)dst, (void *)qs, sizeof(struct QueuedSignal));
+    dst += sizeof(struct QueuedSignal);
+
+    /* Put curenv's blocked signals mask on stack */
+    nosan_memcpy((void *)dst, (void *)(&curenv->env_sig_mask), sizeof(curenv->env_sig_mask));
+    dst += sizeof(curenv->env_sig_mask) + 4;
+
+    /* Prepare trapframe for returning from handler */
+    nosan_memcpy((void *)dst, (void *)(&utf), sizeof(struct UTrapframe));
+    dst += sizeof(struct UTrapframe);
+
+    set_wp(1);
+    switch_address_space(old);
+    
+    /* Update blocked signals mask */
+    curenv->env_sig_mask |= qs->qs_act.sa_mask;
+    if (!(qs->qs_act.sa_mask & SA_NODEFER)) {
+        curenv->env_sig_mask |= SIGNAL_MASK(qs->qs_info.si_signo);
+    }
+
+    /* Modify trapframe to run handler */
+    tf->tf_rsp = rsp;
+    tf->tf_rip = (uintptr_t)curenv->env_pgfault_upcall;
+
+    switch_address_space(&curenv->address_space);
+    env_pop_tf(&curenv->env_tf);
+
+    assert(false);
 }

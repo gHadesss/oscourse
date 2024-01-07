@@ -20,6 +20,11 @@ enum {
     SYS_ipc_try_send,
     SYS_ipc_recv,
     SYS_gettime,
+    // LAB 13: Your code here:
+    SYS_sigqueue,
+    SYS_sigwait,
+    SYS_sigaction,
+    SYS_sigprocmask,
     NSYSCALLS
 };
 

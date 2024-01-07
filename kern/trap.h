@@ -8,6 +8,7 @@
 
 #include <inc/trap.h>
 #include <inc/mmu.h>
+#include <inc/env.h>
 
 /* The kernel's interrupt descriptor table */
 extern struct Gatedesc idt[];
@@ -45,5 +46,7 @@ void thdlr19(void);
 void thdlr48(void);
 void kbd_thdlr(void);
 void serial_thdlr(void);
+
+void signal_handler(struct Trapframe *tf, struct QueuedSignal *qs);
 
 #endif /* JOS_KERN_TRAP_H */

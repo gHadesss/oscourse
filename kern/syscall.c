@@ -525,6 +525,268 @@ sys_region_refs(uintptr_t addr, size_t size, uintptr_t addr2, uintptr_t size2) {
     return region_maxref(&curenv->address_space, addr, size) - region_maxref(&curenv->address_space, addr2, size2);
 }
 
+/* sigqueue system call: add sent signal to pid's queue, ignore it or 
+ * destroy environment immediately.
+ * 
+ * Returns 0 on success, < 0 on error.
+ * Errors are:
+ *  -E_BAD_ENV if environment envid doesn't currently exist.
+ *      (No need to check permissions.)
+ *  -E_INVAL if there is no signal in JOS with such signo.
+ */
+static int
+sys_sigqueue(pid_t pid, int sig, const union sigval value) {
+    if (sig < SIGINT || sig > NSIGNALS) {
+        return -E_INVAL;
+    }
+
+    struct Env *new = NULL;
+    int err = 0;
+    /* We probably want to send signals not only to our children but 
+     * to some other envs */
+    if (envid2env(pid, &new, 0)) {
+        return -E_BAD_ENV;
+    }
+
+    /* Handle special signals first */
+    if (sig == SIGKILL) {
+        err = sys_env_destroy(pid);
+
+        // if (trace_signals) {
+        //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
+        // }
+
+        goto signal_sent;
+    }
+
+    if (sig == SIGSTOP) {
+        new->env_sig_stopped = 1;
+        struct Env *penv = NULL;
+
+        if (envid2env(new->env_parent_id, &penv, false)) {
+            return -E_BAD_ENV;
+        }
+
+        if (!(penv->env_sig_sa[SIGCHLD - 1].sa_flags & SA_NOCLDSTOP)) {
+            err = sys_sigqueue(new->env_parent_id, SIGCHLD, (const union sigval)0);
+        }
+
+        // if (trace_signals) {
+        //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
+        // }
+
+        goto signal_sent;
+    }
+
+    if (sig == SIGCONT && new->env_sig_stopped) {
+        new->env_sig_stopped = 0;
+        struct Env *penv = NULL;
+
+        if (envid2env(new->env_parent_id, &penv, false)) {
+            return -E_BAD_ENV;
+        }
+
+        if (!(penv->env_sig_sa[SIGCHLD - 1].sa_flags & SA_NOCLDSTOP)) {
+            err = sys_sigqueue(new->env_parent_id, SIGCHLD, (const union sigval)0);
+        }
+
+        // if (trace_signals) {
+        //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
+        // }
+
+        goto signal_sent;
+    }
+
+    struct sigaction *sa = new->env_sig_sa + sig - 1;
+
+    if (!new->env_pgfault_upcall) {
+        /* Don't need to enqueue a signal with default handler, 
+         * but we should do SIG_DFL or SIG_IGN anyway. */
+        if (sa->sa_handler == SIG_DFL) {
+            err = sys_env_destroy(pid);
+
+            // if (trace_signals) {
+            //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
+            // }
+
+            goto signal_sent;
+        } else if (sa->sa_handler == SIG_IGN) {
+            // if (trace_signals) {
+            //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
+            // }
+
+            goto signal_sent;
+        }
+    }
+
+    /* Find slot in circular queue */
+    size_t new_end = (new->env_sig_queue_end + 1) % SIG_QUEUE_SIZE;
+    
+    if (new_end == new->env_sig_queue_start) {
+        /* Queue is full, try again later */
+        return -E_AGAIN;
+    }
+
+    /* Fill signal info (inplace) */ 
+    struct QueuedSignal *qs = new->env_sig_queue + new->env_sig_queue_end;
+    new->env_sig_queue_end = new_end;
+
+    memcpy(&(qs->qs_act), sa, sizeof(struct sigaction));
+    qs->qs_info.si_signo = sig;
+    qs->qs_info.si_code = 0;
+    qs->qs_info.si_pid = sys_getenvid();
+    qs->qs_info.padding = 0xffffffff;
+    qs->qs_info.si_addr = 0;
+    qs->qs_info.si_value = value;
+
+    if (sa->sa_flags & SA_RESETHAND) {
+        sa->sa_handler = ((sig == SIGCHLD) || (sig == SIGUSR1) || (sig == SIGUSR2) || (sig == SIGCONT)) ? SIG_IGN : SIG_DFL;
+        sa->sa_flags &= ~SA_SIGINFO;
+    }
+
+signal_sent:
+    if (trace_signals) {
+        cprintf("signals: sent signal %d from %x to %x\n", sig, curenv->env_id, pid);
+    }
+    
+    return err;
+}
+
+/* sigwait system call: suspend environment execution untill specified in set
+ * signals are caught, write caught signo in *sig.
+ * 
+ * Returns 0 on success, < 0 on error.
+ * Errors are:
+ *  -E_INVAL if mask is incorrect.
+ */
+static int
+sys_sigwait(const sigset_t *set, int *sig) {
+    user_mem_assert(curenv, set, sizeof(set), PROT_R | PROT_USER_);
+    user_mem_assert(curenv, sig, sizeof(sig), PROT_R | PROT_W | PROT_USER_);
+    
+    sigset_t tmp_set;
+    nosan_memcpy(&tmp_set, (void *)set, sizeof(sigset_t));
+
+    sigset_t all = ~0U;
+    
+    all &= ~SIGNAL_MASK(SIGSTOP);
+    all &= ~SIGNAL_MASK(SIGCONT);
+    all &= ~SIGNAL_MASK(SIGKILL);
+
+    /* Non-catchable signals */
+    if (tmp_set & ~all) {
+        return -E_INVAL;
+    }
+
+    /* Mask isn't set */
+    if (!(tmp_set & all)) {
+        return -E_INVAL;
+    }
+
+    curenv->env_sig_awaiting = tmp_set;
+    curenv->env_sig_caught_ptr = sig;
+    curenv->env_tf.tf_regs.reg_rax = 0;
+    
+    // if (trace_signals) {
+    //     cprintf("signals: env %x: will wait for signals 0x%x\n", curenv->env_id, tmp_set);
+    // }
+    
+    sched_yield();
+    return 0;
+}
+
+/* sigaction system call: examine and change a signal action. 
+ * If act is non-null, the new action for signal signum is installed from act. 
+ * If oldact is non-null, the previous action is saved in oldact.
+ * 
+ * Returns 0 on success, < 0 on error.
+ * Errors are:
+ *  -E_INVAL if sig is incorrect;
+ *  -E_INVAL if flags specified in act are incorrect.
+ */
+static int
+sys_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
+    if (signum < SIGINT || signum > NSIGNALS) {
+        return -E_INVAL;
+    }
+
+    /* It's not allowed to handle special signals */
+    if (signum == SIGKILL || signum == SIGSTOP || signum == SIGCONT) {
+        return -E_INVAL;
+    }
+
+    if (oldact) {
+        user_mem_assert(curenv, oldact, sizeof(struct sigaction), PROT_R | PROT_W | PROT_USER_);
+        nosan_memcpy((void *)oldact, (void *)&curenv->env_sig_sa[signum - 1], sizeof(struct sigaction));
+        // if (trace_signals)
+    }
+
+    if (!act) {
+        return 0;
+    }
+
+    struct sigaction sa_tmp;
+    user_mem_assert(curenv, act, sizeof(struct sigaction), PROT_R | PROT_USER_);
+    nosan_memcpy((void *)&sa_tmp, (void *)act, sizeof(struct sigaction));
+
+    /* Incorrect flags check */
+    if (sa_tmp.sa_flags & ~SA_ALL_FLAGS) {
+        return -E_INVAL;
+    }
+
+    memcpy((void *)&curenv->env_sig_sa[signum - 1], (void *)&sa_tmp, sizeof(struct sigaction));
+
+    // if (trace_signals)
+
+    return 0;
+}
+
+/* sigprocmask system call: 
+ * 
+ */
+static int 
+sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+    if (oldset) {
+        user_mem_assert(curenv, oldset, sizeof(sigset_t), PROT_R | PROT_W | PROT_USER_);
+        nosan_memcpy((void *)oldset, (void *)&curenv->env_sig_mask, sizeof(sigset_t));
+    }
+
+    if (!set) {
+        return 0;
+    }
+
+    sigset_t tmp_set;
+    user_mem_assert(curenv, set, sizeof(sigset_t), PROT_R | PROT_USER_);
+    nosan_memcpy((void *)&tmp_set, (void *)set, sizeof(sigset_t));
+
+    sigset_t allowed_mask = ~((sigset_t)(~0U) >> NSIGNALS << NSIGNALS);
+    allowed_mask &= (~SIGNAL_MASK(SIGKILL) | ~SIGNAL_MASK(SIGSTOP) | ~SIGNAL_MASK(SIGCONT));
+    tmp_set &= allowed_mask;
+
+    sigset_t new_mask = curenv->env_sig_mask;
+
+    switch (how) {
+    case SIG_BLOCK:
+        new_mask |= tmp_set;
+        break;
+    case SIG_UNBLOCK:
+        new_mask &= ~tmp_set;
+        break;
+    case SIG_SETMASK:
+        new_mask = tmp_set;
+        break;
+    default:
+        return -E_INVAL;
+    }
+
+    // if (trace_signals) {
+    //     cprintf("signals: env %x: change mask from 0x%x to 0x%x\n", curenv->env_id, curenv->env_sig_mask, new_mask);
+    // }
+
+    curenv->env_sig_mask = new_mask;
+    return 0;
+}
+
 /* Dispatches to the correct kernel function, passing the arguments. */
 uintptr_t
 syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6) {
@@ -536,6 +798,7 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
     // LAB 10: Your code here
     // LAB 11: Your code here
     // LAB 12: Your code here
+    // LAB 13: Your code here
     switch(syscallno) {
     case SYS_cputs:
         return sys_cputs((const char *)a1, (size_t)a2);
@@ -572,6 +835,14 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
         return sys_ipc_recv((uintptr_t)a1, (uintptr_t)a2);
     case SYS_gettime:
         return sys_gettime();
+    case SYS_sigqueue:
+        return sys_sigqueue((pid_t)a1, (int)a2, (const union sigval)(void *)a3);
+    case SYS_sigwait:
+        return sys_sigwait((const sigset_t *)a1, (int *)a2);
+    case SYS_sigaction:
+        return sys_sigaction((int)a1, (const struct sigaction *)a2, (struct sigaction *)a3);
+    case SYS_sigprocmask:
+        return sys_sigprocmask((int)a1, (const sigset_t *)a2, (sigset_t *)a3);
     default:
         return -E_NO_SYS;
     }

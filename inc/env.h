@@ -6,8 +6,10 @@
 #include <inc/types.h>
 #include <inc/trap.h>
 #include <inc/memlayout.h>
+#include <inc/signal.h>
 
 typedef int32_t envid_t;
+typedef envid_t pid_t;
 
 /* An environment ID 'envid_t' has three parts:
  *
@@ -26,9 +28,10 @@ typedef int32_t envid_t;
  * stands for the current environment.
  */
 
-#define LOG2NENV    10
-#define NENV        (1 << LOG2NENV)
-#define ENVX(envid) ((envid) & (NENV - 1))
+#define LOG2NENV       10
+#define NENV           (1 << LOG2NENV)
+#define ENVX(envid)    ((envid) & (NENV - 1))
+#define SIG_QUEUE_SIZE 8
 
 /* Values of env_status in struct Env */
 enum {
@@ -57,6 +60,10 @@ struct AddressSpace {
     struct Page *root; /* root node of address space tree */
 };
 
+struct QueuedSignal {
+    siginfo_t qs_info;
+    struct sigaction qs_act;
+};
 
 struct Env {
     struct Trapframe env_tf; /* Saved registers */
@@ -82,6 +89,16 @@ struct Env {
     uint32_t env_ipc_value;  /* Data value sent to us */
     envid_t env_ipc_from;    /* envid of the sender */
     int env_ipc_perm;        /* Perm of page mapping received */
+
+    /* LAB 13: Your code here: */
+    struct sigaction env_sig_sa[NSIGNALS];              /* Array of all signal handlers */
+    struct QueuedSignal env_sig_queue[SIG_QUEUE_SIZE];  /* Circle queue of signals */
+    size_t env_sig_queue_start;                         /* Queue start index */
+    size_t env_sig_queue_end;                           /* Queue end index */
+    bool env_sig_stopped;                               /* Env is stopped via SIGSTOP */
+    sigset_t env_sig_mask;                              /* Blocked signals mask */
+    sigset_t env_sig_awaiting;                          /* Expected signals via sigwait mask */
+    int *env_sig_caught_ptr;                            /* Pointer argument in sigwait */
 };
 
 #endif /* !JOS_INC_ENV_H */

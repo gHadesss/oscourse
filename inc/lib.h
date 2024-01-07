@@ -21,6 +21,7 @@
 #include <inc/fs.h>
 #include <inc/fd.h>
 #include <inc/args.h>
+#include <inc/signal.h>
 
 #ifdef SANITIZE_USER_SHADOW_BASE
 /* asan unpoison routine used for whitelisting regions. */
@@ -99,6 +100,11 @@ int sys_gettime(void);
 
 int vsys_gettime(void);
 
+int sys_sigqueue(pid_t pid, int signo, const union sigval value);
+int sys_sigwait(const sigset_t * set, int * sig);
+int sys_sigaction(int sig, const struct sigaction * act, struct sigaction * oact);
+int sys_sigprocmask(int how, const sigset_t * set, sigset_t * oldset);
+
 /* This must be inlined. Exercise for reader: why? */
 static inline envid_t __attribute__((always_inline))
 sys_exofork(void) {
@@ -159,6 +165,14 @@ int pipeisclosed(int pipefd);
 
 /* wait.c */
 void wait(envid_t env);
+
+/* signal.c */
+int sigqueue(pid_t pid, int sig, const union sigval value);
+int sigwait(const sigset_t *set, int *sig);
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+
+extern void _sighdlr_upcall(void);
 
 /* File open modes */
 #define O_RDONLY  0x0000 /* open for reading only */

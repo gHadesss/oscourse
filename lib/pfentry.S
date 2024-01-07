@@ -33,6 +33,9 @@
 .text
 .globl _pgfault_upcall
 _pgfault_upcall:
+    movl  12(%rsp), %eax
+    cmpl   $0xffffffff, %eax
+    je _sighdlr_upcall
     # Call the C page fault handler.
     movq  %rsp,%rdi # passing the function argument in rdi
     movabs $_handle_vectored_pagefault, %rax

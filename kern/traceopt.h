@@ -50,4 +50,8 @@
 #define trace_init 1
 #endif
 
+#ifndef trace_signals
+#define trace_signals 1
+#endif
+
 #endif

@@ -7,6 +7,7 @@
 #include <inc/assert.h>
 #include <inc/elf.h>
 #include <inc/vsyscall.h>
+#include <inc/signal.h>
 
 #include <kern/env.h>
 #include <kern/kdebug.h>
@@ -19,6 +20,7 @@
 #include <kern/traceopt.h>
 #include <kern/trap.h>
 #include <kern/vsyscall.h>
+#include <kern/syscall.h>
 
 /* Currently active environment */
 struct Env *curenv = NULL;
@@ -202,6 +204,34 @@ env_alloc(struct Env **newenv_store, envid_t parent_id, enum EnvType type) {
     /* Also clear the IPC receiving flag. */
     env->env_ipc_recving = 0;
 
+    /* Clear signal related fields in Env structure */
+    /* LAB 13: Your code here: */
+    memset(&env->env_sig_queue, 0, sizeof(env->env_sig_queue));
+
+    env->env_sig_queue_start = 0;
+    env->env_sig_queue_end = 0;
+
+    env->env_sig_stopped = 0;
+    env->env_sig_mask = 0;
+    env->env_sig_awaiting = 0;
+    env->env_sig_caught_ptr = NULL;
+
+    /* Initialize default signal handlers in new Env */
+    /* LAB 13: Your code here: */
+    if (!parent_id) {
+        memset(&env->env_sig_sa, 0, sizeof(env->env_sig_sa));
+
+        env->env_sig_sa[SIGUSR1 - 1].sa_handler = SIG_IGN;
+        env->env_sig_sa[SIGUSR2 - 1].sa_handler = SIG_IGN;
+        env->env_sig_sa[SIGCHLD - 1].sa_handler = SIG_IGN;
+        env->env_sig_sa[SIGCONT - 1].sa_handler = SIG_IGN;
+    } else {
+        struct Env *new = NULL;
+        envid2env(parent_id, &new, 0);
+        memcpy(&env->env_sig_sa, &new->env_sig_sa, sizeof(env->env_sig_sa));
+        env->env_pgfault_upcall = new->env_pgfault_upcall;
+    }
+    
     /* Commit the allocation */
     env_free_list = env->env_link;
     *newenv_store = env;
@@ -473,6 +503,11 @@ env_destroy(struct Env *env) {
 
     // LAB 3: Your code here
     // LAB 10: Your code here
+    // LAB 13: Your code here
+    if (env->env_parent_id) {
+        syscall(SYS_sigqueue, env->env_parent_id, SIGCHLD, 0, 0, 0, 0);
+    }
+
     env->env_status = ENV_DYING;
     env_free(env);
 
@@ -535,6 +570,32 @@ env_pop_tf(struct Trapframe *tf) {
     panic("Reached unrecheble\n");
 }
 
+/* This function returns -1 if passed environment doesn't have pending signals
+ * to handle, and index in env_sig_queue array if we have signal to handle. */
+int env_check4pending_sigs(struct Env *env) {
+    /* The first case: queue is empty. */
+    if (env->env_sig_queue_start == env->env_sig_queue_end) {
+        return -1;
+    }
+
+    int sig_idx = env->env_sig_queue_start;
+
+    /* The second case: there are probably blocked signals in queue, so we need to check it 
+     * for non-blocked signals presence in it and return index of the first non-blocked. */
+    while (sig_idx != env->env_sig_queue_end) {
+        struct QueuedSignal *qs = &env->env_sig_queue[sig_idx];
+        
+        if (env->env_sig_mask & SIGNAL_MASK(qs->qs_info.si_signo)) {
+            sig_idx = (sig_idx + 1) % SIG_QUEUE_SIZE;
+        } else {
+            env->env_sig_queue_start = (env->env_sig_queue_start + 1) % SIG_QUEUE_SIZE;
+            return sig_idx;
+        }
+    }
+
+    return -1;
+}
+
 /* Context switch from curenv to env.
  * This function does not return.
  *
@@ -578,8 +639,14 @@ env_run(struct Env *env) {
     curenv->env_status = ENV_RUNNING;
     curenv->env_runs++;
 
+    int possible_signo = env_check4pending_sigs(curenv);
+
+    if (possible_signo != -1) {
+        signal_handler(&curenv->env_tf, &curenv->env_sig_queue[possible_signo]); // no return
+    }
+
     switch_address_space(&curenv->address_space);
     env_pop_tf(&curenv->env_tf);
 
-    panic("Reached unrecheble\n");
+    panic("Reached unrecheable\n");
 }
