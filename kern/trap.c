@@ -532,8 +532,9 @@ extern void _sighdlr_upcall();
 
 _Noreturn void
 signal_handler(struct Trapframe *tf, struct QueuedSignal *qs) {
-    // REMINDER: do not swear in educational materials and add tracing macroses later on
-    // if (trace_signals) cprintf("handling signal %d\n", qs->qs_info.si_signo); 
+    if (trace_signals) {
+        cprintf("signals: env %x handling signal %d\n", curenv->env_id, qs->qs_info.si_signo); 
+    }
 
     uintptr_t rsp = tf->tf_rsp;
     struct UTrapframe utf = {
@@ -551,7 +552,10 @@ signal_handler(struct Trapframe *tf, struct QueuedSignal *qs) {
         rsp -= (16 - (rsp & 0xf));
     }
 
-    /* Clarification: siginfo_t is 32 bytes, sigaction is 16, and QueuedSignal is 48. */
+    /* Clarification: siginfo_t is 32 bytes, sigaction is 16, and QueuedSignal is 48. 
+     * Mask is 4 bytes plus 4 bytes of alignment plus 160 bytes of utf. It makes arguments frame
+     * 216 bytes long, which is not aligned by 16, so we add 8 bytes of alignment right after
+     * user's trap-time rsp. */
 
     size_t arg_size = 8 + sizeof(struct UTrapframe) + sizeof(curenv->env_sig_mask) + 4 + sizeof(struct QueuedSignal);
     rsp = rsp - arg_size;
@@ -578,7 +582,8 @@ signal_handler(struct Trapframe *tf, struct QueuedSignal *qs) {
     
     /* Update blocked signals mask */
     curenv->env_sig_mask |= qs->qs_act.sa_mask;
-    if (!(qs->qs_act.sa_mask & SA_NODEFER)) {
+    
+    if (!(qs->qs_act.sa_flags & SA_NODEFER)) {
         curenv->env_sig_mask |= SIGNAL_MASK(qs->qs_info.si_signo);
     }
 

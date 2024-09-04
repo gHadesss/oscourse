@@ -31,6 +31,7 @@ int file_set_size(struct File *f, off_t newsize);
 void file_flush(struct File *f);
 int file_remove(const char *path);
 void fs_sync(void);
+int fifo_create(const char *path, struct File **f);
 
 bool block_is_free(blockno_t blockno);
 blockno_t alloc_block(void);

@@ -54,4 +54,8 @@
 #define trace_signals 1
 #endif
 
+#ifndef trace_signals_more
+#define trace_signals_more 1
+#endif
+
 #endif

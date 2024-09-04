@@ -33,6 +33,12 @@ USERAPPS :=		$(OBJDIR)/user/init \
 			$(OBJDIR)/user/hello \
 			$(OBJDIR)/user/date \
 			$(OBJDIR)/user/vdate \
+			$(OBJDIR)/user/pingpongsig \
+			$(OBJDIR)/user/idle \
+			$(OBJDIR)/user/kill \
+			$(OBJDIR)/user/mkfifo \
+			$(OBJDIR)/user/testsig \
+			# $(OBJDIR)/user/testsigpipe \
 
 
 FSIMGFILES := $(FSIMGTXTFILES) $(USERAPPS)

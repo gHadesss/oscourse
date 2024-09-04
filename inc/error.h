@@ -29,6 +29,7 @@ enum {
     E_NOT_SUPP = 19,    /* Operation not supported */
     /* itask addition for signals */
     E_AGAIN = 20,       /* Resource temporarily unavailable, try again */
+    E_FIFO_CLOSED = 21, /* fifo file doesn't have any writers or readers */
     MAXERROR
 };
 

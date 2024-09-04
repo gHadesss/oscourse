@@ -552,9 +552,9 @@ sys_sigqueue(pid_t pid, int sig, const union sigval value) {
     if (sig == SIGKILL) {
         err = sys_env_destroy(pid);
 
-        // if (trace_signals) {
-        //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
-        // }
+        if (trace_signals) {
+            cprintf("signals: sent signal SIGKILL from %x to %x\n", curenv->env_id, pid);
+        }
 
         goto signal_sent;
     }
@@ -568,12 +568,12 @@ sys_sigqueue(pid_t pid, int sig, const union sigval value) {
         }
 
         if (!(penv->env_sig_sa[SIGCHLD - 1].sa_flags & SA_NOCLDSTOP)) {
-            err = sys_sigqueue(new->env_parent_id, SIGCHLD, (const union sigval)0);
+            sys_sigqueue(new->env_parent_id, SIGCHLD, (const union sigval)0);
         }
 
-        // if (trace_signals) {
-        //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
-        // }
+        if (trace_signals) {
+            cprintf("signals: sent signal SIGSTOP from %x to %x\n", curenv->env_id, pid);
+        }
 
         goto signal_sent;
     }
@@ -587,12 +587,12 @@ sys_sigqueue(pid_t pid, int sig, const union sigval value) {
         }
 
         if (!(penv->env_sig_sa[SIGCHLD - 1].sa_flags & SA_NOCLDSTOP)) {
-            err = sys_sigqueue(new->env_parent_id, SIGCHLD, (const union sigval)0);
+            sys_sigqueue(new->env_parent_id, SIGCHLD, (const union sigval)0);
         }
 
-        // if (trace_signals) {
-        //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
-        // }
+        if (trace_signals) {
+            cprintf("signals: sent signal SIGCONT from %x to %x\n", curenv->env_id, pid);
+        }
 
         goto signal_sent;
     }
@@ -605,15 +605,15 @@ sys_sigqueue(pid_t pid, int sig, const union sigval value) {
         if (sa->sa_handler == SIG_DFL) {
             err = sys_env_destroy(pid);
 
-            // if (trace_signals) {
-            //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
-            // }
+            if (trace_signals) {
+                cprintf("signals: sent SIG_DFL signal %d from %x to %x, upcall not set\n", sig, curenv->env_id, pid);
+            }
 
             goto signal_sent;
         } else if (sa->sa_handler == SIG_IGN) {
-            // if (trace_signals) {
-            //     cprintf("signals: sent signal %d from %x to %x\n", signo, curenv->env_id, pid);
-            // }
+            if (trace_signals) {
+                cprintf("signals: sent SIG_IGN signal %d from %x to %x, upcall not set\n", sig, curenv->env_id, pid);
+            }
 
             goto signal_sent;
         }
@@ -644,11 +644,11 @@ sys_sigqueue(pid_t pid, int sig, const union sigval value) {
         sa->sa_flags &= ~SA_SIGINFO;
     }
 
-signal_sent:
     if (trace_signals) {
         cprintf("signals: sent signal %d from %x to %x\n", sig, curenv->env_id, pid);
     }
     
+signal_sent:
     return err;
 }
 
@@ -662,7 +662,10 @@ signal_sent:
 static int
 sys_sigwait(const sigset_t *set, int *sig) {
     user_mem_assert(curenv, set, sizeof(set), PROT_R | PROT_USER_);
-    user_mem_assert(curenv, sig, sizeof(sig), PROT_R | PROT_W | PROT_USER_);
+    
+    if (sig) {
+        user_mem_assert(curenv, sig, sizeof(sig), PROT_R | PROT_W | PROT_USER_);
+    }
     
     sigset_t tmp_set;
     nosan_memcpy(&tmp_set, (void *)set, sizeof(sigset_t));
@@ -684,12 +687,15 @@ sys_sigwait(const sigset_t *set, int *sig) {
     }
 
     curenv->env_sig_awaiting = tmp_set;
-    curenv->env_sig_caught_ptr = sig;
     curenv->env_tf.tf_regs.reg_rax = 0;
     
-    // if (trace_signals) {
-    //     cprintf("signals: env %x: will wait for signals 0x%x\n", curenv->env_id, tmp_set);
-    // }
+    if (sig) {
+        curenv->env_sig_caught_ptr = sig;
+    }
+
+    if (trace_signals) {
+        cprintf("signals: env %x: will wait for signals 0x%x\n", curenv->env_id, tmp_set);
+    }
     
     sched_yield();
     return 0;
@@ -718,7 +724,10 @@ sys_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
     if (oldact) {
         user_mem_assert(curenv, oldact, sizeof(struct sigaction), PROT_R | PROT_W | PROT_USER_);
         nosan_memcpy((void *)oldact, (void *)&curenv->env_sig_sa[signum - 1], sizeof(struct sigaction));
-        // if (trace_signals)
+        
+        if (trace_signals) {
+            cprintf("signals: env %x asked old sigaction of signal %d to oldact %p\n", curenv->env_id, signum, oldact);
+        }
     }
 
     if (!act) {
@@ -736,7 +745,9 @@ sys_sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
 
     memcpy((void *)&curenv->env_sig_sa[signum - 1], (void *)&sa_tmp, sizeof(struct sigaction));
 
-    // if (trace_signals)
+    if (trace_signals) {
+        cprintf("signals: env %x changed sigaction of signal %d to act %p\n", curenv->env_id, signum, act);
+    }
 
     return 0;
 }
@@ -779,9 +790,9 @@ sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
         return -E_INVAL;
     }
 
-    // if (trace_signals) {
-    //     cprintf("signals: env %x: change mask from 0x%x to 0x%x\n", curenv->env_id, curenv->env_sig_mask, new_mask);
-    // }
+    if (trace_signals) {
+        cprintf("signals: env %x changed mask from 0x%x to 0x%x\n", curenv->env_id, curenv->env_sig_mask, new_mask);
+    }
 
     curenv->env_sig_mask = new_mask;
     return 0;

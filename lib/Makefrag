@@ -34,7 +34,8 @@ LIB_SRCFILES :=		$(LIB_SRCFILES) \
 
 LIB_SRCFILES :=		$(LIB_SRCFILES) \
 			lib/signal.c \
-			lib/sigentry.S
+			lib/sigentry.S \
+			lib/fifo.c
 
 LIB_OBJFILES := $(patsubst lib/%.c, $(OBJDIR)/lib/%.o, $(LIB_SRCFILES))
 LIB_OBJFILES := $(patsubst lib/%.S, $(OBJDIR)/lib/%.o, $(LIB_OBJFILES))

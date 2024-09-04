@@ -148,6 +148,26 @@ serve_open(envid_t envid, struct Fsreq_open *req,
     o->o_fd->fd_dev_id = devfile.dev_id;
     o->o_mode = req->req_omode;
 
+    char *blk;
+    
+    if (f->f_type == FTYPE_FIFO) {
+        if ((res = file_get_block(f, 0, &blk)) < 0) {
+            return res;
+        }
+
+        struct Fifo *fifo = (struct Fifo*) blk;
+
+        if (req->req_omode == O_RDONLY) {
+            fifo->n_readers++;
+        }
+
+        if (req->req_omode == O_WRONLY) {
+            fifo->n_writers++;
+        }
+
+        o->o_fd->fd_dev_id = devfifo.dev_id;
+	}
+
     if (debug) cprintf("sending success, page %08lx\n", (unsigned long)o->o_fd);
 
     /* Share the FD page with the caller by setting *pg_store,
@@ -156,6 +176,49 @@ serve_open(envid_t envid, struct Fsreq_open *req,
     *perm_store = PROT_RW | PROT_SHARE;
 
     return 0;
+}
+
+int
+serve_create_fifo(envid_t envid, struct Fsreq_create_fifo *req) {
+	char path[MAXPATHLEN];
+	struct File *f;
+	char *blk;
+	int res;
+
+    /* Copy in the path, making sure it's null-terminated */
+	memmove(path, req->req_path, MAXPATHLEN);
+	path[MAXPATHLEN - 1] = 0;
+
+    /* Find an open file ID */
+	if ((res = fifo_create(path, &f)) < 0) {
+        if (trace_fifo) {
+            cprintf("fifo: fifo_create failed: %i", res);
+        }
+
+		return res;
+	}
+
+    /* Mapping fifo file in memory */
+	if ((res = file_set_size(f, sizeof(struct Fifo))) < 0) {
+        return res;
+    }
+
+	if ((res = file_get_block(f, 0, &blk)) < 0) {
+        return res;
+    }
+
+	struct Fifo *fifo = (struct Fifo*) blk;
+
+	fifo->n_writers = 0;
+	fifo->n_readers = 0;
+	fifo->fifo_r_offset = 0;
+	fifo->fifo_w_offset = 0;
+
+    if (trace_fifo) {
+        cprintf("fifo: serv successfully created fifo\n");
+    }
+
+	return 0;
 }
 
 /* Set the size of req->req_fileid to req->req_size bytes, truncating
@@ -213,6 +276,58 @@ serve_read(envid_t envid, union Fsipc *ipc) {
     return res;
 }
 
+int
+serve_read_fifo(envid_t envid, union Fsipc *ipc) {
+	struct Fsreq_read_fifo *req = &ipc->read_fifo;
+	struct Fsret_read *ret = &ipc->readRet;
+	struct OpenFile *o;
+	char *blk, *buf;
+	int res, i;
+
+    /* Requested number of bytes to read */
+	int n = req->req_n > FIFO_BUF_SIZE ? FIFO_BUF_SIZE : req->req_n;
+
+	if ((res = openfile_lookup(envid, req->req_fileid, &o)) < 0) {
+        return res;
+    }
+
+    /* Instead of reading like in file_read we read from 1st (I mean 0th) file block */
+	if ((res = file_get_block(o->o_file, 0, &blk)) < 0) {
+        return res;
+    }
+
+	struct Fifo *fifo = (struct Fifo*) blk;
+	buf = ret->ret_buf;
+	ret->ret_n = 0;
+    // size_t ret_n = 0;
+
+	for (i = 0; i < n; i++) {
+		if (trace_fifo) {
+            cprintf("fifo: read %d of %d\tt_off: %d\n", i, n, fifo->fifo_r_offset);
+        }
+
+		/* Buffer is currently empty */
+		if (fifo->fifo_r_offset == fifo->fifo_w_offset) {
+			/* If there are no writers, this means that we need to send SIGPIPE */
+            /* Do we? */
+            // COMMENT TO TEST 
+            if (fifo->n_writers == 0) {
+                return -E_FIFO_CLOSED;
+            }
+
+			/* Try again later when writers will actually write something */ 
+			return -E_AGAIN;
+		}
+
+		buf[i] = fifo->fifo_buf[fifo->fifo_r_offset % FIFO_BUF_SIZE];
+		fifo->fifo_r_offset++;
+        ret->ret_n++;
+        // ret_n++;
+	}
+
+	return ret->ret_n;
+}
+
 /* Write req->req_n bytes from req->req_buf to req_fileid, starting at
  * the current seek position, and update the seek position
  * accordingly.  Extend the file if necessary.  Returns the number of
@@ -238,6 +353,58 @@ serve_write(envid_t envid, union Fsipc *ipc) {
     return res;
 }
 
+int
+serve_write_fifo(envid_t envid, union Fsipc *ipc)
+{
+	struct Fsreq_write_fifo *req = &ipc->write_fifo;
+	struct Fsret_write *ret = &ipc->writeRet;
+	struct OpenFile *o;
+	char *blk, *buf;
+	int i, res;
+    // int ret_n = 0;
+
+	int n = req->req_n > FIFO_BUF_SIZE ? FIFO_BUF_SIZE : req->req_n;
+	buf = req->req_buf;
+
+	if ((res = openfile_lookup(envid, req->req_fileid, &o)) < 0) {
+        return res;
+    }
+
+    /* The same as read_fifo, 0th filebno */
+	if ((res = file_get_block(o->o_file, 0, &blk)) < 0) {
+        return res;
+    }
+
+	struct Fifo *fifo = (struct Fifo*) blk;
+	ret->ret_n = 0;
+
+	for (i = 0; i < n; i++) {
+		if (trace_fifo) {
+            cprintf("fifo: write %d of %d\tw_off: %d\n", i, n, fifo->fifo_w_offset);
+        }
+
+        /* Out of readers, this means that we need to send SIGPIPE */
+        
+        /* COMMENT TO TEST FIFO */
+        // if (fifo->n_readers == 0) {
+        //     return -E_FIFO_CLOSED;
+        // }
+
+        if (fifo->fifo_w_offset >= fifo->fifo_r_offset + FIFO_BUF_SIZE) {
+            /* Buffer is full, return again later when somebody reads something */
+			return -E_AGAIN;
+		}
+
+		fifo->fifo_buf[fifo->fifo_w_offset % FIFO_BUF_SIZE] = buf[i];
+		fifo->fifo_w_offset++;
+        ret->ret_n++;
+        // ret_n++;
+	}
+
+	return ret->ret_n;
+    // return ret_n;
+}
+
 /* Stat ipc->stat.req_fileid.  Return the file's struct Stat to the
  * caller in ipc->statRet. */
 int
@@ -254,7 +421,39 @@ serve_stat(envid_t envid, union Fsipc *ipc) {
     strcpy(ret->ret_name, o->o_file->f_name);
     ret->ret_size = o->o_file->f_size;
     ret->ret_isdir = (o->o_file->f_type == FTYPE_DIR);
+    ret->ret_isfifo = (o->o_file->f_type == FTYPE_FIFO);
+
     return 0;
+}
+
+int
+serve_stat_fifo(envid_t envid, union Fsipc *ipc)
+{
+	struct Fsreq_stat_fifo *req = &ipc->stat_fifo;
+	struct Fsret_stat *ret = &ipc->statRet;
+	struct OpenFile *o;
+	char *blk;
+	int res;
+
+	if ((res = openfile_lookup(envid, req->req_fileid, &o)) < 0) {
+        return res;
+    }
+
+	if ((res = file_get_block(o->o_file, 0, &blk)) < 0) {
+        return res;
+    }
+
+	struct Fifo *fifo = (struct Fifo*) blk;
+	strcpy(ret->ret_name, o->o_file->f_name);
+	ret->ret_size = fifo->fifo_w_offset - fifo->fifo_r_offset;
+	ret->ret_isdir = 0;
+	ret->ret_isfifo = 1;
+
+    if (trace_fifo) {
+        cprintf("fifo: stat_fifo executed successfully\n");
+    }
+
+	return 0;
 }
 
 /* Flush all data and metadata of req->req_fileid to disk. */
@@ -277,6 +476,41 @@ serve_sync(envid_t envid, union Fsipc *req) {
     return 0;
 }
 
+int
+serve_close_fifo(envid_t envid, union Fsipc *ipc)
+{
+	struct Fsreq_close_fifo *req = &ipc->close_fifo;
+	struct OpenFile *o;
+	char *blk;
+	int res;
+
+	if ((res = openfile_lookup(envid, req->req_fileid, &o)) < 0) {
+        return res;
+    }
+
+	if ((res = file_get_block(o->o_file, 0, &blk)) < 0) {
+        return res;
+    }
+
+	struct Fifo *fifo = (struct Fifo*) blk;
+
+	if (o->o_mode == O_RDONLY) {
+        fifo->n_readers--;
+    }
+
+	if (o->o_mode == O_WRONLY) {
+        fifo->n_writers--;
+    }
+
+	file_flush(o->o_file);
+
+    if (trace_fifo) {
+        cprintf("fifo: closed fifo for env %x\n", envid);
+    }
+
+	return 0;
+}
+
 typedef int (*fshandler)(envid_t envid, union Fsipc *req);
 
 fshandler handlers[] = {
@@ -287,7 +521,13 @@ fshandler handlers[] = {
         [FSREQ_FLUSH] = serve_flush,
         [FSREQ_WRITE] = serve_write,
         [FSREQ_SET_SIZE] = serve_set_size,
-        [FSREQ_SYNC] = serve_sync};
+        [FSREQ_SYNC] = serve_sync,
+        // [FSREQ_CREATE_FIFO] = serve_create_fifo,
+        [FSREQ_READ_FIFO]  = serve_read_fifo,
+	    [FSREQ_STAT_FIFO]  = serve_stat_fifo,
+	    [FSREQ_WRITE_FIFO] = (fshandler)serve_write_fifo,
+	    [FSREQ_CLOSE_FIFO] = (fshandler)serve_close_fifo
+};
 #define NHANDLERS (sizeof(handlers) / sizeof(handlers[0]))
 
 void
@@ -315,6 +555,8 @@ serve(void) {
         pg = NULL;
         if (req == FSREQ_OPEN) {
             res = serve_open(whom, (struct Fsreq_open *)fsreq, &pg, &perm);
+        } else if (req == FSREQ_CREATE_FIFO) {
+			res = serve_create_fifo(whom, (struct Fsreq_create_fifo*)fsreq);
         } else if (req < NHANDLERS && handlers[req]) {
             res = handlers[req](whom, fsreq);
         } else {

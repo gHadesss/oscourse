@@ -111,6 +111,7 @@ static struct Dev *devtab[] = {
         &devfile,
         &devpipe,
         &devcons,
+        &devfifo,
         NULL};
 
 int
@@ -274,6 +275,7 @@ fstat(int fdnum, struct Stat *stat) {
     stat->st_name[0] = 0;
     stat->st_size = 0;
     stat->st_isdir = 0;
+    stat->st_isfifo = 0;
     stat->st_dev = dev;
 
     return (*dev->dev_stat)(fd, stat);

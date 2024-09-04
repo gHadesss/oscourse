@@ -41,7 +41,9 @@ check4pending_sigwait(struct Env *env) {
     /* Return found signal in sigwait fields, remove it from queue */
     struct QueuedSignal *qs = env->env_sig_queue + sig_idx;
 
-    // if (trace_signals) cprintf("blah blah blah\n");
+    if (trace_signals) {
+        cprintf("signals: removed signo %d from env %x's queue\n", qs->qs_info.si_signo, env->env_id);
+    }
 
     if (env->env_sig_caught_ptr) {
         user_mem_assert(env, env->env_sig_caught_ptr, sizeof(*env->env_sig_caught_ptr), PROT_W | PROT_USER_);
@@ -56,20 +58,25 @@ check4pending_sigwait(struct Env *env) {
 
     env->env_sig_awaiting = 0;
 
-    struct QueuedSignal * qs_end = env->env_sig_queue + env->env_sig_queue_end;
+    struct QueuedSignal *qs_end = env->env_sig_queue + env->env_sig_queue_end;
+    
     if (qs < qs_end) {
         memmove(qs, qs + 1, sizeof(struct QueuedSignal) * (env->env_sig_queue_end - sig_idx - 1));
+        env->env_sig_queue_end = (env->env_sig_queue_end - 1) % SIG_QUEUE_SIZE;
     }
     else {
         memmove(qs, qs + 1, sizeof(struct QueuedSignal) * (SIG_QUEUE_SIZE - sig_idx - 1));
-        memcpy(env->env_sig_queue + SIG_QUEUE_SIZE - 1, env->env_sig_queue, sizeof(struct QueuedSignal));
+        memmove(env->env_sig_queue + SIG_QUEUE_SIZE - 1, env->env_sig_queue, sizeof(struct QueuedSignal));
         
         if (env->env_sig_queue_end) {
             memmove(env->env_sig_queue, env->env_sig_queue + 1, sizeof(struct QueuedSignal) * (env->env_sig_queue_end - 1));
+            env->env_sig_queue_end = (env->env_sig_queue_end - 1) % SIG_QUEUE_SIZE;
+        } else {
+            env->env_sig_queue_end = SIG_QUEUE_SIZE - 1;
         }
     }
 
-    env->env_sig_queue_end = (env->env_sig_queue_end - 1) % SIG_QUEUE_SIZE;
+
     return 0;
 }
 

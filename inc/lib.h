@@ -174,6 +174,9 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 
 extern void _sighdlr_upcall(void);
 
+/* fifo.c */
+int mkfifo(const char *pathname);
+
 /* File open modes */
 #define O_RDONLY  0x0000 /* open for reading only */
 #define O_WRONLY  0x0001 /* open for writing only */
@@ -192,6 +195,10 @@ extern void (*volatile sys_yield)(void);
 
 #ifndef debug
 #define debug 0
+#endif
+
+#ifndef trace_fifo
+#define trace_fifo 0
 #endif
 
 #endif /* !JOS_INC_LIB_H */

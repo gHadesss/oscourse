@@ -47,12 +47,23 @@ struct File {
     uint8_t f_pad[256 - MAXNAMELEN - 8 - 4 * NDIRECT - 4];
 } __attribute__((packed)); /* required only on some 64-bit machines */
 
+#define FIFO_BUF_SIZE (512)
+
+struct Fifo {
+	int n_readers;                 /* number of readers */
+	int n_writers;                 /* number of writers */
+	off_t fifo_r_offset;           /* read offset       */
+	off_t fifo_w_offset;           /* write offset      */
+	uint8_t fifo_buf[FIFO_BUF_SIZE];  /* data buffer       */
+};
+
 /* An inode block contains exactly BLKFILES 'struct File's */
 #define BLKFILES (BLKSIZE / sizeof(struct File))
 
 /* File types */
-#define FTYPE_REG 0 /* Regular file */
-#define FTYPE_DIR 1 /* Directory */
+#define FTYPE_REG  0 /* Regular file */
+#define FTYPE_DIR  1 /* Directory */
+#define FTYPE_FIFO 2 /* FIFO */
 
 /* File system super-block (both in-memory and on-disk) */
 
@@ -75,7 +86,12 @@ enum {
     FSREQ_STAT,
     FSREQ_FLUSH,
     FSREQ_REMOVE,
-    FSREQ_SYNC
+    FSREQ_SYNC,
+    FSREQ_CREATE_FIFO,
+    FSREQ_READ_FIFO,
+	FSREQ_WRITE_FIFO,
+	FSREQ_STAT_FIFO,
+	FSREQ_CLOSE_FIFO
 };
 
 union Fsipc {
@@ -92,12 +108,15 @@ union Fsipc {
         size_t req_n;
     } read;
     struct Fsret_read {
-        char ret_buf[PAGE_SIZE];
+        // char ret_buf[PAGE_SIZE];
+        char ret_buf[PAGE_SIZE - sizeof(int)];
+        int ret_n;
     } readRet;
     struct Fsreq_write {
         int req_fileid;
         size_t req_n;
         char req_buf[PAGE_SIZE - (2 * sizeof(size_t))];
+        // char req_buf[PAGE_SIZE - sizeof(int) - sizeof(size_t)];
     } write;
     struct Fsreq_stat {
         int req_fileid;
@@ -106,6 +125,7 @@ union Fsipc {
         char ret_name[MAXNAMELEN];
         off_t ret_size;
         int ret_isdir;
+        int ret_isfifo;
     } statRet;
     struct Fsreq_flush {
         int req_fileid;
@@ -113,6 +133,27 @@ union Fsipc {
     struct Fsreq_remove {
         char req_path[MAXPATHLEN];
     } remove;
+    struct Fsret_write {
+        int ret_n;
+    } writeRet;
+    struct Fsreq_create_fifo {
+        char req_path[MAXPATHLEN];
+	} create_fifo;
+    struct Fsreq_read_fifo {
+		int req_fileid;
+		size_t req_n;
+	} read_fifo;
+	struct Fsreq_write_fifo {
+		int req_fileid;
+		size_t req_n;
+		char req_buf[PAGE_SIZE - sizeof(int) - sizeof(size_t)];
+	} write_fifo;
+	struct Fsreq_stat_fifo {
+		int req_fileid;
+	} stat_fifo;
+	struct Fsreq_close_fifo {
+		int req_fileid;
+	} close_fifo;
 
     /* Ensure Fsipc is one page */
     char _pad[PAGE_SIZE];

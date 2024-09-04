@@ -471,3 +471,34 @@ fs_sync(void) {
         flush_block(diskaddr(i));
     }
 }
+
+int
+fifo_create(const char *path, struct File **pf)
+{
+    struct File *dir, *filp;
+	char name[MAXNAMELEN];
+    int res;
+
+    if (!(res = walk_path(path, &dir, &filp, name))) {
+        return -E_FILE_EXISTS;
+    }
+
+    if (res != -E_NOT_FOUND || dir == 0) {
+        return res;
+    }
+    
+    if ((res = dir_alloc_file(dir, &filp)) < 0) {
+        return res;
+    }
+
+    strcpy(filp->f_name, name);
+    filp->f_type = FTYPE_FIFO;
+    *pf = filp;
+    file_flush(dir);
+
+    if (trace_fifo) {
+        cprintf("fifo: fifo created\n");
+    }
+    
+    return 0;
+}

@@ -10,21 +10,29 @@
 
 void _handle_signal(struct UTrapframe *utf, struct QueuedSignal *qs) {
     if (qs->qs_act.sa_handler == SIG_DFL) {
-        // if (trace_signals)
+        if (trace_signals) {
+            cprintf("signals: userspace signal handler of SIG_DFL in env %x\n", thisenv->env_id);
+        }
 
         sys_env_destroy(CURENVID);
     } else if (qs->qs_act.sa_handler == SIG_IGN) {
-        // if (trace_signals)
+        if (trace_signals) {
+            cprintf("signals: userspace signal handler of SIG_IGN in env %x\n", thisenv->env_id);
+        }
         
         return;
     }
     
     if (qs->qs_act.sa_flags & SA_SIGINFO) {
-        // if (trace_signals)
+        if (trace_signals) {
+            cprintf("signals: userspace launching sa_sigaction of signal %d in env %x\n", qs->qs_info.si_signo, thisenv->env_id);
+        }
 
         (qs->qs_act.sa_sigaction)(qs->qs_info.si_signo, &qs->qs_info, (void *)utf);
     } else {
-        // if (trace_signals)
+        if (trace_signals) {
+            cprintf("signals: userspace launching sa_handler of signal %d in env %x\n", qs->qs_info.si_signo, thisenv->env_id);
+        }
 
         (qs->qs_act.sa_handler)(qs->qs_info.si_signo);
     }
